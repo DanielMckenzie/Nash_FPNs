@@ -1,13 +1,14 @@
 '''
-    This script generates the data (i.e. context, Nash equilibrium pairs) for 
-    regularized RPS (so the NE can also be thought of as a Quantal Response 
+    This script generates the data (i.e. context, Nash equilibrium pairs) for
+    regularized RPS (so the NE can also be thought of as a Quantal Response
     Equilibrium).
 '''
+
 import numpy as np
 import torch
 from torch.utils.data import Dataset, TensorDataset, DataLoader
 from torch.utils.data.dataset import random_split
-from utils import project_simplex
+from utils import project_simplex, SampleSimplex
 
 context       = torch.tensor
 action        = torch.tensor
@@ -21,7 +22,7 @@ payoff_matrix = torch.tensor
 seed = 30
 torch.manual_seed(seed)
 W = torch.rand(3, 3) * torch.tensor([0.5, 10, 20])
-W = W.permute(1,0)
+W = W.permute(1, 0)
 print(W)
 
 def sample_context(num_samples: int) -> context:
@@ -45,9 +46,9 @@ def create_payoff_matrix(d: context) -> payoff_matrix:
 def F(x: action, d: context, player_size=3) -> action:
     B = create_payoff_matrix(d)
     x = x.view(x.shape[0], x.shape[1], 1)
-    Fx_1 = B.bmm(x[:, player_size:, :]) + x[:, :player_size, :] + 1
+    Fx_1 = B.bmm(x[:, player_size:, :]) + torch.log(x[:, :player_size, :] + 1e-10) + 1
     Bt = B.permute(0, 2, 1)
-    Fx_2 = -Bt.bmm(x[:, :player_size, :]) - x[:, player_size:, :] - 1
+    Fx_2 = -Bt.bmm(x[:, :player_size, :]) + torch.log(x[:, player_size:, :] + 1e-10) + 1
     Fx = torch.cat((Fx_1, Fx_2), dim=1)
     return Fx.view(Fx.shape[0], Fx.shape[1])
 
@@ -56,37 +57,40 @@ def F(x: action, d: context, player_size=3) -> action:
 # as game gradient is monotone.
 # ---------------------------------------------------------------------------
     
-def get_nash_eq(d: context, fxd_pt_tol=1e-5, max_iter=10000, step_size=5e-3,
+def get_nash_eq(d: context, fxd_pt_tol=1e-5, max_iter=10000, step_size=5e-4,
                 action_size=6, debug_mode=False) -> action:
     num_samples = d.shape[0]
-    x           = torch.rand(num_samples, action_size)
+    # x           = torch.rand(num_samples, action_size)
+    x = SampleSimplex(num_samples, action_size)
     conv        = False
     step        = 0
     while not conv and step < max_iter:
         x_prev = x.clone()
-        x = project_simplex(x - step_size * F(x, d))
+        y = project_simplex(x - step_size*F(x, d))
+        # x = project_simplex(x - step_size * F(y, d))
+        x = y
         res = torch.max(torch.norm(x - x_prev, dim=1)) 
         step += 1
         conv = res < fxd_pt_tol 
         if step % 5 == 0 and debug_mode:
             fmt_str = "Step {:5d}: |xk - xk_prev| = {:2.2e}   x[0,:] = "
             print(fmt_str.format(step, res) + str(x[0,:]))
+        if step % 100 == 0:
+            step_size *= 0.5
     return x
 
 # ---------------------------------------------------------------------------
 # Functions for creating data. Outputs data loaders
 # ---------------------------------------------------------------------------
 
-def create_data(train_batch_size=20, test_batch_size=10,
-                train_size=100, test_size=10):
+def create_data(train_batch_size=200, test_batch_size=100,
+                train_size=1000, test_size=100):
     '''
-        Ideally we would create the data set and store it, so that all nets 
-        are trained on the same data. However I'm not sure how to do this.
-        As the random seed is fixed, the current approach is probably OK.
+        Create and store data.
     '''
     d_context = sample_context(train_size + test_size)
-    x_true = get_nash_eq(d_context, max_iter=100, debug_mode=True)
-    dataset = TensorDataset(x_true, d_context)
+    x_true = get_nash_eq(d_context, debug_mode=True)
+    dataset = TensorDataset(x_true, d_context) # Note non-standard ordering 
     
     train_dataset, test_dataset = random_split(dataset, 
                                                [train_size, test_size])
@@ -98,7 +102,7 @@ def create_data(train_batch_size=20, test_batch_size=10,
             'test_size': test_size
             }
     save_dir = './data/'
-    state_path = save_dir + 'RPS_training_data.pth'
+    state_path = save_dir + 'RPS_training_data_QRE.pth'
     torch.save(state, state_path)
     
 # ---------------------------------------------------------------------------

@@ -178,20 +178,26 @@ class GRELogit(Solver):
 
 class ZSGSolver(torch.autograd.Function):
     '''
-    Custom autograd function. This layer solves a zero-sum game on the 
-    forward pass, and differentiates through it on the backward pass.
+    Custom autograd function. This layer takes as input a payoff matrix and then
+    solves a zero-sum game on the forward pass. Differentiates through it on 
+    the backward pass.
     '''
-    def __init__(self, usize, vsize):
-        self.usize, self.vsize = usize, vsize
-        super(ZSGSolver, self).__init__()
-        
-    def forward(self, input):
+    ## This style of autograd Function is no longer supported. 
+    # def __init__(self, usize, vsize):
+    #    self.usize, self.vsize = usize, vsize
+    #    super(ZSGSolver, self).__init__()
+
+    @staticmethod
+    def forward(ctx, input, size=3):
+        # input is a batch of payoff matrices.
         # Naive handling of batch-size > 1
         input_np = input.numpy()
         batchsize = input_np.shape[0]
-        U = np.zeros([batchsize, self.usize], dtype=np.float64)
-        V = np.zeros([batchsize, selv.vsize], dtype=np.float64)
-        self.dev2s = []
+        U = np.zeros([batchsize, size], dtype=np.float64)
+        V = np.zeros([batchsize, size], dtype=np.float64)
+        # dev2s will store the Jacobians.
+        dev2s = np.zeros([batchsize, 2*size + 2, 2*size + 2],
+                         dtype=np.float64)
         for i in range(batchsize):
             p = np.squeeze(input_np[i, :, :]) # payoff matrix
             game = ZeroSumGame(p)
@@ -200,18 +206,21 @@ class ZSGSolver(torch.autograd.Function):
             # [u, v] is the Nash equilibrium corresponding to payoff p
             U[i, :] = u
             V[i, :] = v
-            self.dev2s.append(dev2)
+            dev2s[i,:,:] = dev2
             
         U, V = torch.DoubleTensor(U), torch.DoubleTensor(V)
-        self.save_for_backward(input, U, V)
+        dev2s = torch.DoubleTensor(dev2s)
+        ctx.save_for_backward(input, U, V, dev2s)
         
         return U, V
     
-    def backward(self, grad_u, grad_v):
+    @staticmethod
+    def backward(ctx, grad_u, grad_v, size=3):
         # backprop gradients of u and v thru solver.
         batchsize = grad_u.shape[0]
-        P, U, V = tuple([x.data.numpy() for x in self.saved_variables])
-        dP = np.zeros([batchsize, self.usize, self.vsize])
+        P, U, V, dev2s = ctx.saved_tensors
+        # P, U, V, dev2a = tuple([x.data.numpy() for x in ctx.saved_variables])
+        dP = np.zeros([batchsize, size, size], dtype=np.float64)
         for i in range(batchsize):
             # naive handling of batchsize > 1
             u, v = U[i,:], V[i,:]
@@ -220,10 +229,10 @@ class ZSGSolver(torch.autograd.Function):
             # Will convert to numpy, do a bunch of computations and then 
             # convert back to pytorch.
             gu, gv = grad_u[i, :].numpy(), grad_v[i, :].numpy()
-            d = np.linalg.solve(self.dev2s[i], -np.concatenate([gu, gv, [0], [0]], axis=0))
+            d = np.linalg.solve(dev2s[i, :, :], -np.concatenate([gu, gv, [0.0], [0.0]], axis=0))
             # extract the differentials we want
-            du = d[:self.usize]
-            dv = d[self.usize: self.usize + self.vsize]
+            du = d[:size]
+            dv = d[size: 2*size]
             dp = np.outer(du, v) + np.outer(u, dv)
             dP[i, :, :] = dp
             

@@ -38,3 +38,16 @@ def model_params(net):
     table.add_row(['TOTAL', num_params])
     return table
 
+def SampleSimplex(num_samples, dim):
+    '''
+        Sample uniformly from the interior of the probability simplex of dim=dim
+    '''
+    x = torch.zeros(num_samples, dim+1)
+    x[:, :dim-1] = torch.rand(num_samples, dim-1)
+    x[:, dim] = 1
+    y,_ = torch.sort(x)
+    z = y[:, 1:] - y[:, :-1]
+    
+    return z
+    
+    

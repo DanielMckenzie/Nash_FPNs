@@ -11,6 +11,7 @@ import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
 from utils import project_simplex
+from Payoff_Net_Utils import ZSGSolver
 
 classification = torch.tensor
 latent_variable = torch.tensor
@@ -112,9 +113,12 @@ payoff_matrix = torch.tensor
 class NFPN_RPS_Net(nn.Module):
     def __init__(self, action_size=6, context_size=3):
         super(NFPN_RPS_Net, self).__init__()
-        self.fc_1 = nn.Linear(context_size, 5*action_size)
-        self.fc_2 = nn.Linear(5*action_size, action_size)
-        self.fc_3 = nn.Linear(action_size, action_size)
+        # self.fc_1 = nn.Linear(context_size, 5*action_size)
+        # self.fc_2 = nn.Linear(5*action_size, action_size)
+        # self.fc_3 = nn.Linear(action_size, action_size)
+        self.fc_1 = nn.Linear(context_size, action_size)
+        self.fc_2 = nn.Linear(2*action_size, 5*action_size)
+        self.fc_3 = nn.Linear(5*action_size, action_size)
         self.leaky_relu = nn.LeakyReLU(0.1)
         self.action_size = action_size
         
@@ -131,7 +135,8 @@ class NFPN_RPS_Net(nn.Module):
         '''
             Map context to latent space.
         '''
-        Qd = self.fc_2(self.leaky_relu(self.fc_1(d)))
+        # Qd = self.fc_2(self.leaky_relu(self.fc_1(d)))
+        Qd = self.fc_1(d)
         return Qd
     
     def latent_space_forward(self, z1, z2: action) -> action:
@@ -139,8 +144,11 @@ class NFPN_RPS_Net(nn.Module):
         Forward operator. Note this is of the form
             Proj(z - F(z;d))
         '''
-        zz = z1 + z2
-        zz = project_simplex(zz - self.fc_3(self.leaky_relu(zz)))
+        # zz = z1 + z2
+        xd = torch.cat((z1, z2), dim=1)
+        Fxd = z1 + self.fc_3(self.leaky_relu(self.fc_2(xd)))
+        # zz = project_simplex(zz - self.fc_3(self.leaky_relu(zz)))
+        zz = project_simplex(z1 - Fxd)
 
         return zz
     
@@ -167,17 +175,18 @@ class NFPN_RPS_Net(nn.Module):
 # 
 # ---------------------------------------------------------------------------- 
         
-class CMU_RPS_Net(nn.Module):
+class Payoff_Net(nn.Module):
     '''
         Mildly adapted version of the RPS architecture proposed in "What game
         are we playing?" by Feng, Kolter and Ling.
     '''
-    def __init__(self, size=3, nfeatures=2):
+    def __init__(self, size=3, nfeatures=3):
+        super(Payoff_Net, self).__init__()
         self.size = 3
         self.usize, self.vsize = size, size
         self.nfeatures = nfeatures
         self.fc1 = nn.Linear(nfeatures, 3, bias=False)
-        self.fc1.weight.data = torch.Tensor(np.zeros([3,2])) # control the initialization?
+        self.fc1.weight.data = torch.DoubleTensor(np.zeros([size, nfeatures])) # control the initialization?
         
     def forward(self, x):
         fullsize = x.size()
@@ -192,8 +201,8 @@ class CMU_RPS_Net(nn.Module):
         temp[:, 0, 2], temp[:, 2, 0] = -x[:, 1], x[:, 1]
         temp[:, 1, 2], temp[:, 2, 1] = x[:, 2], -x[:, 2]
         
-        solver = ZSGSolver(self.usize, self.vsize)
-        u, v = solver(temp)
+        u, v = ZSGSolver.apply(temp, self.size)
+        # u, v = solver(temp)
         
-        return u, v
+        return torch.cat((u, v), dim=1)  # Different to original code, return u and v strategies as a tuple.
     
