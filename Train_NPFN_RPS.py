@@ -4,6 +4,7 @@ import torch.nn as nn
 from Networks import NFPN_RPS_Net
 from Generate_Data import create_data
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 import time
 
 # ---------------------------------------------------------------------------
@@ -11,6 +12,7 @@ import time
 # ---------------------------------------------------------------------------
 
 state = torch.load('./data/RPS_training_data_QRE.pth')
+# state = torch.load('./data/RPS_training_data.pth')
 train_dataset = state['train_dataset']
 test_dataset = state['test_dataset']
 train_size = state['train_size']
@@ -24,12 +26,14 @@ test_loader = DataLoader(dataset=test_dataset, batch_size=test_size, shuffle=Fal
 # ---------------------------------------------------------------------------
 
 model = NFPN_RPS_Net()
-learning_rate = 1e-4
+learning_rate = 1e-3
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+scheduler = ReduceLROnPlateau(optimizer, 'min')
 fixed_pt_tol = 1.0e-5
 criterion = nn.MSELoss()
 max_epochs = 100
 save_str = 'NFPN_RPS_data_QRE.pth'
+# save_str = 'NFPN_RPS_data.pth'
 
 test_loss_hist = []  
 train_loss_hist = [] 
@@ -48,19 +52,23 @@ print(model)
 
 for epoch in range(max_epochs):
     start_time = time.time()
+    num_batches = len(train_loader)
+    train_loss = 0
     for x_batch, d_batch in train_loader:
         model.train()
         optimizer.zero_grad()
         x_pred = model(d_batch, eps=fixed_pt_tol)
         loss = criterion(x_pred, x_batch)
         train_loss_ave = 0.95*train_loss_ave + 0.05*loss.item()
+        # train_loss += loss.item()
         loss.backward()
         optimizer.step()
-
+    
     for x_batch, d_batch in test_loader:
         x_pred = model(d_batch, eps=fixed_pt_tol)
         test_loss = criterion(x_pred, x_batch)
 
+    scheduler.step(test_loss)
     time_epoch = time.time() - start_time
 
     print(fmt.format(epoch+1, max_epochs, train_loss_ave, test_loss.item(),
@@ -68,7 +76,7 @@ for epoch in range(max_epochs):
                      fixed_pt_tol, time_epoch))
 
     test_loss_hist.append(test_loss.item())
-    train_loss_hist.append(loss.item())
+    train_loss_hist.append(train_loss_ave)
     depth_hist.append(model.depth)
 
     if epoch % 10 == 0 or epoch == max_epochs-1:
@@ -80,3 +88,11 @@ for epoch in range(max_epochs):
                 'depth_hist': depth_hist
                 }
         torch.save(state, save_str)
+        
+# Debugging
+for x_batch, d_batch in train_loader:
+    x_pred = model(d_batch)
+    for i in range(10):
+        print('\n predicted NE then real NE\n')
+        print(torch.stack((x_pred[i, :].data, x_batch[i,:])))
+        

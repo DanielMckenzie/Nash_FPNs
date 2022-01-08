@@ -208,8 +208,8 @@ class ZSGSolver(torch.autograd.Function):
             V[i, :] = v
             dev2s[i,:,:] = dev2
             
-        U, V = torch.DoubleTensor(U), torch.DoubleTensor(V)
-        dev2s = torch.DoubleTensor(dev2s)
+        U, V = torch.Tensor(U), torch.Tensor(V)
+        dev2s = torch.Tensor(dev2s)
         ctx.save_for_backward(input, U, V, dev2s)
         
         return U, V
@@ -236,5 +236,22 @@ class ZSGSolver(torch.autograd.Function):
             dp = np.outer(du, v) + np.outer(u, dv)
             dP[i, :, :] = dp
             
-        return torch.DoubleTensor(dP)
+        return torch.Tensor(dP), None
+    
+# ---------------------------------------------------------------------------
+# Small tool for converting vector to antisymmetric matrix
+# --------------------------------------------------------------------------- 
       
+def VecToAntiSymMatrix(x, action_size):
+    fullsize = x.size()
+    nbatchsize = fullsize[0]
+    temp = torch.zeros((nbatchsize, action_size, action_size))
+    counter = 0
+    for i in range(action_size-1):
+        for j in range(i+1,action_size):
+            temp[:, i, j] = x[:,counter]
+            temp[:, j, i] = - x[:,counter]
+            counter +=1
+    return temp
+
+    

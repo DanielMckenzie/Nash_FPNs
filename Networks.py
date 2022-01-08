@@ -10,8 +10,8 @@ import torch
 import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
-from utils import project_simplex
-from Payoff_Net_Utils import ZSGSolver
+from utils import project_simplex, SampleSimplex
+from Payoff_Net_Utils import ZSGSolver, VecToAntiSymMatrix
 
 classification = torch.tensor
 latent_variable = torch.tensor
@@ -29,7 +29,9 @@ def forward_implicit(net, d: image, eps=1.0e-3, max_depth=100,
     with torch.no_grad():
         net.depth = 0.0
         Qd = net.data_space_forward(d)
-        u = torch.zeros(Qd.shape, device=net.device())
+        # u = torch.zeros(Qd.shape, device=net.device())
+        u = torch.ones(Qd.shape, device=net.device())/3
+        # u = SampleSimplex(Qd.shape[0],Qd.shape[1])
         u_prev = np.Inf*torch.ones(u.shape, device=net.device())
         all_samp_conv = False
         while not all_samp_conv and net.depth < max_depth:
@@ -117,8 +119,10 @@ class NFPN_RPS_Net(nn.Module):
         # self.fc_2 = nn.Linear(5*action_size, action_size)
         # self.fc_3 = nn.Linear(action_size, action_size)
         self.fc_1 = nn.Linear(context_size, action_size)
-        self.fc_2 = nn.Linear(2*action_size, 5*action_size)
-        self.fc_3 = nn.Linear(5*action_size, action_size)
+        # self.fc_2 = nn.Linear(2*action_size, 5*action_size)
+        self.fc_2 = nn.Linear(action_size, action_size)
+        # self.fc_3 = nn.Linear(5*action_size, action_size)
+        self.fc_3 = nn.Linear(action_size, action_size)
         self.leaky_relu = nn.LeakyReLU(0.1)
         self.action_size = action_size
         
@@ -145,14 +149,15 @@ class NFPN_RPS_Net(nn.Module):
             Proj(z - F(z;d))
         '''
         # zz = z1 + z2
-        xd = torch.cat((z1, z2), dim=1)
-        Fxd = z1 + self.fc_3(self.leaky_relu(self.fc_2(xd)))
-        # zz = project_simplex(zz - self.fc_3(self.leaky_relu(zz)))
+        # xd = torch.cat((z1, z2), dim=1)
+        Fxd = self.fc_3(self.leaky_relu(self.fc_2(z1 + z2))) + z1
+        # Fxd = self.fc_3(self.leaky_relu(self.fc_2(xd))) # + z1
+        # zz = project_simplex(xd - self.fc_3(self.leaky_relu(xd)))
         zz = project_simplex(z1 - Fxd)
 
         return zz
     
-    def forward(self, d: context, eps=1.0e-5, max_depth=100,
+    def forward(self, d: context, eps=1.0e-5, max_depth=200,
                 depth_warning=False):
         '''
             Forward propagation using N-FPN. Finds fixed point of PGD-type
@@ -180,28 +185,30 @@ class Payoff_Net(nn.Module):
         Mildly adapted version of the RPS architecture proposed in "What game
         are we playing?" by Feng, Kolter and Ling.
     '''
-    def __init__(self, size=3, nfeatures=3):
+    def __init__(self, action_size=3, nfeatures=3):
         super(Payoff_Net, self).__init__()
-        self.size = 3
-        self.usize, self.vsize = size, size
+        self.action_size = action_size
         self.nfeatures = nfeatures
-        self.fc1 = nn.Linear(nfeatures, 3, bias=False)
-        self.fc1.weight.data = torch.DoubleTensor(np.zeros([size, nfeatures])) # control the initialization?
+        self.fc1 = nn.Linear(nfeatures, 10, bias=False)
+        self.fc2 = nn.Linear(10, action_size, bias=False)
+        self.leaky_relu = nn.LeakyReLU(0.1)
+        # self.fc1.weight.data = torch.Tensor(np.zeros([size, nfeatures])) # control the initialization?
         
     def forward(self, x):
         fullsize = x.size()
         nbatchsize = fullsize[0]
-        temp = torch.DoubleTensor(np.zeros((nbatchsize, 3, 3)))
-        x = self.fc1(x)
+        temp = torch.Tensor(np.zeros((nbatchsize, 3, 3)))
+        x = self.fc2(self.leaky_relu(self.fc1(x)))
         
         # now set up to use differentiable game solver
-        x = x.view(-1, 3)
+        temp = VecToAntiSymMatrix(x, self.action_size)
+#        x = x.view(-1, 3)
+#        
+#        temp[:, 0, 1], temp[:, 1, 0] = x[:, 0], -x[:, 0]
+#        temp[:, 0, 2], temp[:, 2, 0] = -x[:, 1], x[:, 1]
+#        temp[:, 1, 2], temp[:, 2, 1] = x[:, 2], -x[:, 2]
         
-        temp[:, 0, 1], temp[:, 1, 0] = x[:, 0], -x[:, 0]
-        temp[:, 0, 2], temp[:, 2, 0] = -x[:, 1], x[:, 1]
-        temp[:, 1, 2], temp[:, 2, 1] = x[:, 2], -x[:, 2]
-        
-        u, v = ZSGSolver.apply(temp, self.size)
+        u, v = ZSGSolver.apply(temp, self.action_size)
         # u, v = solver(temp)
         
         return torch.cat((u, v), dim=1)  # Different to original code, return u and v strategies as a tuple.

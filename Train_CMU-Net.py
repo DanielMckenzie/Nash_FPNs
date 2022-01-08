@@ -13,6 +13,7 @@ from Networks import Payoff_Net
 from Payoff_Net_Utils import *
 from Generate_Data import create_data
 from torch.utils.data import DataLoader
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 import time
 
 # ---------------------------------------------------------------------------
@@ -36,9 +37,10 @@ model = Payoff_Net()
 model = model.to(torch.float) # convert from double precision to single precision
 learning_rate = 1e-4
 optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+scheduler = ReduceLROnPlateau(optimizer, 'min')
 fixed_pt_tol = 1.0e-5
 criterion = nn.MSELoss()
-max_epochs = 100
+max_epochs = 500
 save_str = 'Payoff_Net_data.pth'
 
 test_loss_hist = []  
@@ -46,7 +48,7 @@ train_loss_hist = []
 train_loss_ave = 0
 
 fmt = '[{:4d}/{:4d}]: train loss = {:7.3e} | test_loss = {:7.3e} ' 
-fmt += '| lr = {:5.1e} | fxt_pt_tol = {:5.1e} | time = {:4.1f} sec'
+fmt += '| lr = {:5.1e} | time = {:4.1f} sec'
 
 # ---------------------------------------------------------------------------
 # Train!
@@ -63,6 +65,7 @@ for epoch in range(max_epochs):
         x_pred = model(d_batch)
         loss = criterion(x_pred, x_batch)
         train_loss_ave = 0.95*train_loss_ave + 0.05*loss.item()
+        # train_loss = loss.item()
         loss.backward()
         optimizer.step()
         
@@ -70,14 +73,15 @@ for epoch in range(max_epochs):
     for x_batch, d_batch in test_loader:
         x_pred = model(d_batch)
         test_loss = criterion(x_pred, x_batch)
-        
+     
+    scheduler.step(test_loss)
     time_epoch = time.time() - start_time
     
     print(fmt.format(epoch+1, max_epochs, train_loss_ave, test_loss.item(),
                      optimizer.param_groups[0]['lr'], time_epoch))
     
     test_loss_hist.append(test_loss.item())
-    train_loss_hist.append(loss.item())
+    train_loss_hist.append(train_loss_ave)
     
     if epoch % 10 == 0 or epoch == max_epochs-1:
         state = {
@@ -86,3 +90,9 @@ for epoch in range(max_epochs):
                 'train_loss_hist': train_loss_hist,
                 }
         torch.save(state, save_str)
+
+# Debugging
+for x_batch, d_batch in test_loader:
+    x_pred = model(d_batch)
+    for i in range(10):
+        print('predicted NE is' + str(x_pred[i,:]) + ' True NE is ' + str(x_batch[i,:]))
