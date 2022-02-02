@@ -1,0 +1,3684 @@
+{
+  "nbformat": 4,
+  "nbformat_minor": 0,
+  "metadata": {
+    "accelerator": "GPU",
+    "colab": {
+      "name": "Nash-FPN-TRAFIX-Driver-Berlin-Tiergarten.ipynb",
+      "provenance": [],
+      "collapsed_sections": [],
+      "toc_visible": true
+    },
+    "kernelspec": {
+      "display_name": "Python 3",
+      "name": "python3"
+    },
+    "language_info": {
+      "name": "python"
+    }
+  },
+  "cells": [
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "nVWmv8cbI4MI",
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "outputId": "c4fb7b4e-adcb-4310-986d-169b5ea92e77"
+      },
+      "source": [
+        "import numpy as np\n",
+        "import torch\n",
+        "import torch.nn               as nn\n",
+        "import torch.distributions as tdist\n",
+        "import os\n",
+        "import sys\n",
+        "from torch.utils.data import Dataset, TensorDataset, DataLoader\n",
+        "import torch.optim as optim\n",
+        "import torch.nn.utils.spectral_norm as spectral_norm\n",
+        "from torch.utils.data         import Dataset, TensorDataset, DataLoader\n",
+        "from torchvision              import datasets\n",
+        "import time\n",
+        "from time import sleep\n",
+        "from tqdm import tqdm\n",
+        "from prettytable import PrettyTable\n",
+        "\n",
+        "from google.colab import drive\n",
+        "drive.mount('/content/drive')\n",
+        "sys.path.append('/content/drive/MyDrive/NashFPNs/TransportationNetworks/')\n",
+        "save_dir = './drive/MyDrive/NashFPNs/' # generated data should be saved in this path\n",
+        "\n",
+        "device = \"cuda\"\n",
+        "\n",
+        "capacity   = torch.tensor\n",
+        "context    = torch.tensor\n",
+        "action     = torch.tensor\n",
+        "edge       = torch.tensor\n",
+        "inference  = torch.tensor \n",
+        "context    = torch.tensor\n",
+        "\n",
+        "seed = 42\n",
+        "torch.manual_seed(seed)"
+      ],
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "text": [
+            "Drive already mounted at /content/drive; to attempt to forcibly remount, call drive.mount(\"/content/drive\", force_remount=True).\n"
+          ],
+          "name": "stdout"
+        }
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "UJrw1eNdJXFO"
+      },
+      "source": [
+        "## Load Training Data"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "7fAsRmF3C0XA"
+      },
+      "source": [
+        "# load data and split into training and testing set:\n",
+        "data_set = 'Berlin-Tiergarten'\n",
+        "save_dir = 'drive/MyDrive/NashFPNs/TrafficTrainingData/'\n",
+        "state_path = save_dir + data_set + '_training_data.pth'\n",
+        "state = torch.load(state_path)"
+      ],
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "SdRvrGubJgNI"
+      },
+      "source": [
+        "capacity        = state['capacity']\n",
+        "W               = state['W']\n",
+        "N               = state['N']\n",
+        "free_flow_time  = state['free_flow_time']\n",
+        "x_train         = state['x_train']\n",
+        "x_test          = state['x_test']\n",
+        "d_train         = state['d_train']\n",
+        "d_test          = state['d_test']\n",
+        "b               = state['origin_destination_pairs']\n",
+        "\n",
+        "context_size    = d_train.shape[1]\n",
+        "n_train         = d_train.shape[0]\n",
+        "n_test          = d_test.shape[0]\n",
+        "\n",
+        "n_ODpairs       = b.shape[1]\n",
+        "n_edges         = x_train.shape[1]\n",
+        "n_nodes         = b.shape[0]"
+      ],
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "6BmanQ3rSFB3"
+      },
+      "source": [
+        ""
+      ],
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "X9b3A_YXJq2C"
+      },
+      "source": [
+        "train_dataset   = TensorDataset(x_train, d_train)\n",
+        "test_dataset    = TensorDataset(x_test, d_test)\n",
+        "\n",
+        "train_batch_size = 500\n",
+        "test_batch_size  = 500\n",
+        "\n",
+        "train_loader  = DataLoader(dataset=train_dataset,  \n",
+        "                            batch_size=train_batch_size, shuffle=True) \n",
+        "test_loader   = DataLoader(dataset=test_dataset,   \n",
+        "                            batch_size=test_batch_size,  shuffle=False) "
+      ],
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "43fxNXnfQaXq"
+      },
+      "source": [
+        "norm_x_test = torch.norm(x_test)"
+      ],
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "id": "0-3HZWnVIO6l",
+        "outputId": "53b354fc-922a-4530-e49f-81b090e44c88"
+      },
+      "source": [
+        "print('n_ODpairs = ', n_ODpairs, 'n_nodes = ', n_nodes, ', n_edges = ', n_edges, ', n_train = ', x_train.shape[0])"
+      ],
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "text": [
+            "n_ODpairs =  644 n_nodes =  361 , n_edges =  766 , n_train =  5000\n"
+          ],
+          "name": "stdout"
+        }
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "wijoA6pndMlk"
+      },
+      "source": [
+        "## Create Neural Network Architecture"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "6WxTVgZPyugn"
+      },
+      "source": [
+        "inference = torch.tensor\n",
+        "latent_variable = torch.tensor\n",
+        "context = torch.tensor\n",
+        "\n",
+        "class Traffix_Net(nn.Module):\n",
+        "    def __init__(self, N, b, context_size, alpha, device):\n",
+        "        super().__init__()\n",
+        "        \n",
+        "        self.b = b.to(device)\n",
+        "        self.alpha = alpha\n",
+        "\n",
+        "        U,s,VT = torch.linalg.svd(N, full_matrices=False) \n",
+        "        # truncate sing. values below 1e-5\n",
+        "        ind = s >= 1e-5 \n",
+        "        s = s[ind]\n",
+        "        U = U[:,ind]\n",
+        "        VT = VT[ind, :]\n",
+        "        self.V = VT.t().to(device)\n",
+        "        self.V_Sinv_UT = VT.t().matmul( torch.diag(1/s).matmul(U.t()) ).to(device)\n",
+        "\n",
+        "        self.n_nodes    = N.shape[0]\n",
+        "        self.n_edges    = N.shape[1] \n",
+        "        self.n_ODpairs  = b.shape[1] \n",
+        "\n",
+        "        self.F_fcs_d = nn.ModuleList([nn.Linear(context_size, 100), \n",
+        "                                    nn.Linear(100, 100)])\n",
+        "        self.fc_final_d = nn.Linear(100, self.n_edges)\n",
+        "\n",
+        "        self.F_fcs = nn.ModuleList([nn.Linear(self.n_edges, 100), \n",
+        "                                    nn.Linear(100, 100)])\n",
+        "        self.fc_final = nn.Linear(100, self.n_edges)\n",
+        "        self.relu = nn.ReLU()\n",
+        "        self.leaky_relu = nn.LeakyReLU(0.1)\n",
+        "\n",
+        "        self.tanh = nn.Tanh()\n",
+        "\n",
+        "        for fc in self.F_fcs: \n",
+        "          torch.nn.init.zeros_(fc.weight)\n",
+        "        for fc in self.F_fcs_d: \n",
+        "          torch.nn.init.zeros_(fc.weight)\n",
+        "\n",
+        "        torch.nn.init.zeros_(self.fc_final.weight)\n",
+        "        torch.nn.init.zeros_(self.fc_final_d.weight)\n",
+        "\n",
+        "    def device(self):\n",
+        "        return next(self.parameters()).data.device\n",
+        "\n",
+        "    def project_C1(self, z: latent_variable) -> latent_variable: \n",
+        "        return torch.clamp(z, min=0)\n",
+        "\n",
+        "    def project_C2(self, z: latent_variable) -> latent_variable:\n",
+        "        Pz    = z - (self.V).matmul(self.V.t().matmul(z)) + self.V_Sinv_UT.matmul(self.b.unsqueeze(0))\n",
+        "        return Pz\n",
+        "\n",
+        "    def F(self, x: action, d: context) -> action: \n",
+        "      \"\"\"\n",
+        "        Game Gradient Parameterization\n",
+        "          Inputs: \n",
+        "            x = action with shape (batch_size x n_edges) \n",
+        "            d = context with shape (batch_size x context_size)\n",
+        "      \"\"\"\n",
+        "\n",
+        "        Fd = d\n",
+        "        for fc in self.F_fcs_d:\n",
+        "          Fd = self.tanh(fc(Fd))\n",
+        "        Fd = self.leaky_relu(self.fc_final_d(Fd))\n",
+        "        \n",
+        "        Fx = x\n",
+        "        for fc in self.F_fcs: \n",
+        "            Fx = self.tanh(fc(Fx)) \n",
+        "\n",
+        "        Fx = self.leaky_relu(self.fc_final(Fx))\n",
+        "        Fx = torch.clamp(Fx, min = -5e6, max=5e6) \n",
+        "        \n",
+        "        return self.leaky_relu(Fx*Fd)\n",
+        "        \n",
+        "\n",
+        "    def T(self, z: latent_variable, d: context) -> latent_variable: \n",
+        "      \"\"\"\n",
+        "        Davis-Yin Splitting described in Algorithm 3 \n",
+        "          Inputs: \n",
+        "            z = action with shape (batch_size x n_edges x n_ODpairs) \n",
+        "            d = context with shape (batch_size x context_size)\n",
+        "      \"\"\"\n",
+        "\n",
+        "        x = self.project_C1(z)\n",
+        "        v = torch.sum(x, dim=2)\n",
+        "        Fv = self.F(v,d)\n",
+        "        y = 2*x - z - self.alpha*Fv.unsqueeze(2)\n",
+        "        y = self.project_C2(y)\n",
+        "        z = z + y - x\n",
+        "\n",
+        "        return z\n",
+        "\n",
+        "\n",
+        "    def S(self, z: latent_variable) -> inference:\n",
+        "      \"\"\"\n",
+        "        Final layer that map from latent space to inference space. \n",
+        "        Operations: project, sum across OD pairs, and clamp\n",
+        "          Inputs: \n",
+        "            z = action with shape (batch_size x n_edges x n_ODpairs) \n",
+        "          Output:\n",
+        "            v = action with shape (batch_size x n_edges)\n",
+        "      \"\"\"\n",
+        "\n",
+        "        z = self.project_C1(z)\n",
+        "        v = torch.sum(z, dim=2)\n",
+        "        return torch.clamp(v, max=1e6)\n",
+        "\n",
+        "    def forward(self, d: context, eps=1.0e-2, max_depth=100, \n",
+        "                depth_warning=False) -> inference: \n",
+        "\n",
+        "        with torch.no_grad():\n",
+        "            self.depth = 0.0\n",
+        "\n",
+        "            z = torch.zeros((d.shape[0], self.n_edges, self.n_ODpairs), device=self.device())\n",
+        "            z_prev = z.clone()         \n",
+        "            \n",
+        "            all_samp_conv = False\n",
+        "            while not all_samp_conv and self.depth < max_depth:\n",
+        "                z_prev = z.clone()   \n",
+        "                z = self.T(z,d)\n",
+        "                diff_norm = torch.norm(z - z_prev, dim=1) \n",
+        "                diff_norm = torch.norm( diff_norm, dim=1) \n",
+        "                diff_norm = torch.max( diff_norm ) # take norm along the latter two dimensions then max\n",
+        "                self.depth += 1.0\n",
+        "                all_samp_conv = diff_norm <= eps\n",
+        "            \n",
+        "        if self.depth >= max_depth and depth_warning:\n",
+        "            print(\"\\nWarning: Max Depth Reached - Break Forward Loop\\n\")\n",
+        "\n",
+        "        attach_gradients = self.training\n",
+        "        if attach_gradients:\n",
+        "            z = self.T(z, d)\n",
+        "            return self.S(z)\n",
+        "        else:\n",
+        "            return self.S(z) \n",
+        "\n",
+        "\n",
+        "  "
+      ],
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "yWIqEf3Pv3Gw"
+      },
+      "source": [
+        ""
+      ],
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "H1IRHSkWyujD",
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "outputId": "d6f4e744-4078-4710-8709-8bcdd34db080"
+      },
+      "source": [
+        "# define net and see how outputs look like\n",
+        "alpha = 1e-2\n",
+        "net = Traffix_Net(N, b, context_size, alpha, device)\n",
+        "net.to(device)\n",
+        "net(d_test.to(device))"
+      ],
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "execute_result",
+          "data": {
+            "text/plain": [
+              "tensor([[539.3669, 474.2359, 721.8926,  ..., 455.1769, 270.0961, 263.4366],\n",
+              "        [539.3669, 474.2359, 721.8926,  ..., 455.1769, 270.0961, 263.4366],\n",
+              "        [539.3669, 474.2359, 721.8926,  ..., 455.1769, 270.0961, 263.4366],\n",
+              "        ...,\n",
+              "        [539.3669, 474.2359, 721.8926,  ..., 455.1769, 270.0961, 263.4366],\n",
+              "        [539.3669, 474.2359, 721.8926,  ..., 455.1769, 270.0961, 263.4366],\n",
+              "        [539.3669, 474.2359, 721.8926,  ..., 455.1769, 270.0961, 263.4366]],\n",
+              "       device='cuda:0', grad_fn=<ClampBackward>)"
+            ]
+          },
+          "metadata": {
+            "tags": []
+          },
+          "execution_count": 8
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "MKp1D-LSFuf-"
+      },
+      "source": [
+        "def get_trafix_score(x_pred: action, x_true: action, eps=5.0e-3, \n",
+        "                     tol=1.0e-3) -> float:\n",
+        "  err           = torch.abs(x_pred - x_true)\n",
+        "  denom         = torch.abs(x_true) + tol\n",
+        "  rel_err       = err.div(denom)\n",
+        "  acc_preds     = rel_err < eps  \n",
+        "  num_samples   = x_true.shape[0]\n",
+        "  num_preds     = x_true.shape[1]\n",
+        "  trafix_score  = 100.0 * sum(sum(acc_preds)) / (num_samples * num_preds) \n",
+        "  return trafix_score\n",
+        "\n",
+        "def get_testing_stats(net, test_loader, criterion, n_edges, eps, depth, eps_traffix_score, device=device):\n",
+        "    test_loss = 0\n",
+        "    correct = 0\n",
+        "    rel_err = 0\n",
+        "    rel_err_dim0 = torch.zeros(n_edges, device=device)\n",
+        "\n",
+        "    net.eval()\n",
+        "    with torch.no_grad():\n",
+        "        for _, (x_true, d_true) in enumerate(test_loader):\n",
+        "          \n",
+        "          x_true, d_true = x_true.to(device), d_true.to(device)\n",
+        "          batch_size = x_true.shape[0]\n",
+        "\n",
+        "          x_pred = net(d_true, eps=eps, max_depth=depth) \n",
+        "\n",
+        "          test_loss += batch_size * criterion(x_pred, x_true)\n",
+        "\n",
+        "          rel_err += torch.norm(x_pred - x_true)**2\n",
+        "          rel_err_dim0 += torch.norm(x_pred - x_true, dim=0)**2\n",
+        "\n",
+        "    test_loss  /= len(test_loader.dataset)\n",
+        "    rel_err    = torch.sqrt(rel_err) / norm_x_test\n",
+        "\n",
+        "    # rel_err_dim0 = torch.sqrt(rel_err_dim0) / norm_x_test_dim0\n",
+        "    # ind = rel_err_dim0 < eps_traffic_score\n",
+        "    # traffic_score = 100*(sum(ind)/n_edges)\n",
+        "    traffix_score = get_trafix_score(x_pred, x_true, eps=eps_traffix_score) \n",
+        "    \n",
+        "\n",
+        "    net.train()\n",
+        "\n",
+        "    return test_loss, rel_err, traffix_score\n"
+      ],
+      "execution_count": null,
+      "outputs": []
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "GzIL4AFf7ByG",
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "outputId": "0915e1de-f503-4bec-b120-6faacdb93c54"
+      },
+      "source": [
+        "def model_params(net):\n",
+        "    table = PrettyTable([\"Network Component\", \"# Parameters\"])\n",
+        "    num_params = 0\n",
+        "    for name, parameter in net.named_parameters():\n",
+        "        if not parameter.requires_grad:\n",
+        "            continue\n",
+        "        table.add_row([name, parameter.numel()])\n",
+        "        num_params += parameter.numel()\n",
+        "    table.add_row(['TOTAL', num_params])\n",
+        "    return table\n",
+        "\n",
+        "print(net)\n",
+        "print(model_params(net))"
+      ],
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "text": [
+            "Traffix_Net(\n",
+            "  (F_fcs_d): ModuleList(\n",
+            "    (0): Linear(in_features=10, out_features=100, bias=True)\n",
+            "    (1): Linear(in_features=100, out_features=100, bias=True)\n",
+            "  )\n",
+            "  (fc_final_d): Linear(in_features=100, out_features=766, bias=True)\n",
+            "  (F_fcs): ModuleList(\n",
+            "    (0): Linear(in_features=766, out_features=100, bias=True)\n",
+            "    (1): Linear(in_features=100, out_features=100, bias=True)\n",
+            "  )\n",
+            "  (fc_final): Linear(in_features=100, out_features=766, bias=True)\n",
+            "  (relu): ReLU()\n",
+            "  (leaky_relu): LeakyReLU(negative_slope=0.1)\n",
+            "  (tanh): Tanh()\n",
+            ")\n",
+            "+-------------------+--------------+\n",
+            "| Network Component | # Parameters |\n",
+            "+-------------------+--------------+\n",
+            "|  F_fcs_d.0.weight |     1000     |\n",
+            "|   F_fcs_d.0.bias  |     100      |\n",
+            "|  F_fcs_d.1.weight |    10000     |\n",
+            "|   F_fcs_d.1.bias  |     100      |\n",
+            "| fc_final_d.weight |    76600     |\n",
+            "|  fc_final_d.bias  |     766      |\n",
+            "|   F_fcs.0.weight  |    76600     |\n",
+            "|    F_fcs.0.bias   |     100      |\n",
+            "|   F_fcs.1.weight  |    10000     |\n",
+            "|    F_fcs.1.bias   |     100      |\n",
+            "|  fc_final.weight  |    76600     |\n",
+            "|   fc_final.bias   |     766      |\n",
+            "|       TOTAL       |    252732    |\n",
+            "+-------------------+--------------+\n"
+          ],
+          "name": "stdout"
+        }
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "nfrpKYfkpSS6"
+      },
+      "source": [
+        "## Set up Training"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "jY6ajFo5yul4",
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "outputId": "d3f20d7d-9b1c-4076-c564-f6412235ca94"
+      },
+      "source": [
+        "# training setup\n",
+        "learning_rate = 5e-5\n",
+        "weight_decay  = 0.0\n",
+        "optimizer     = optim.Adam(net.parameters(), lr=learning_rate, weight_decay = weight_decay)\n",
+        "lr_scheduler  = optim.lr_scheduler.StepLR(optimizer, step_size=250, gamma=0.1)\n",
+        "eps           = 1.0e-4  # Used for stopping criterion in implicit-depth\n",
+        "criterion     = nn.MSELoss()\n",
+        "max_depth     = 50\n",
+        "\n",
+        "train_loss_hist     = []\n",
+        "test_loss_hist      = []\n",
+        "traffix_score_hist  = []\n",
+        "rel_err_hist        = []\n",
+        "best_traffix_score  = 0.0\n",
+        "\n",
+        "max_epochs = int(2e2)\n",
+        "x_test = x_test.to(device)\n",
+        "d_test = d_test.to(device)\n",
+        "\n",
+        "# start_time_epoch = time.time() # timer for display execution time per epoch multiple\n",
+        "fmt        = '[{:4d}/{:4d}]: train loss = {:7.3e} | test loss = {:7.3e} | traffix score = {:7.3f}% | rel error = {:7.3e} ' \n",
+        "fmt       += 'depth = {:5.1f} | lr = {:5.1e} | eps = {:5.1e} | time = {:5.1e}'\n",
+        "print(net)                 # display Tnet configuration\n",
+        " \n",
+        "print('\\nTraining G-FPN')\n",
+        "for epoch in range(max_epochs): \n",
+        "\n",
+        "  net.train()\n",
+        "  sleep(0.3)  # slows progress bar so it won't print on multiple lines\n",
+        "  loss_ave        = 0.0\n",
+        "  epoch_start_time = time.time()\n",
+        "  tot = len(train_loader)\n",
+        "  with tqdm(total=tot, unit=\" batch\", leave=False, ascii=True) as tepoch:\n",
+        "\n",
+        "    tepoch.set_description(\"[{:3d}/{:3d}]\".format(epoch+1, max_epochs))\n",
+        "\n",
+        "    for _, (x_true, d_true) in enumerate(train_loader):\n",
+        "\n",
+        "      x_true, d_true = x_true.to(device), d_true.to(device)\n",
+        "\n",
+        "      optimizer.zero_grad()\n",
+        "      x_pred = net(d_true, eps=eps, max_depth=max_depth) \n",
+        "\n",
+        "      loss = criterion(x_pred, x_true)\n",
+        "      local_batch_size = x_true.shape[0]\n",
+        "      loss_ave += local_batch_size * loss\n",
+        "\n",
+        "      loss.backward()\n",
+        "      optimizer.step()\n",
+        "\n",
+        "      tepoch.update(1)\n",
+        "      tepoch.set_postfix(train_loss=\"{:5.2e}\".format(loss.detach().cpu().numpy()),\n",
+        "                          depth=\"{:5.1f}\".format(net.depth))\n",
+        "\n",
+        "  lr_scheduler.step()\n",
+        "  epoch_end_time = time.time()\n",
+        "  time_epoch = epoch_end_time - epoch_start_time\n",
+        "  loss_ave = loss_ave/n_train\n",
+        "  train_loss_hist.append(loss_ave)\n",
+        "\n",
+        "  eps_traffix_score = 5e-3\n",
+        "  test_loss, rel_err_test, traffix_score = get_testing_stats(net, test_loader, criterion, n_edges, eps, max_depth, eps_traffix_score)\n",
+        "\n",
+        "  traffix_score_hist.append(traffix_score)\n",
+        "  test_loss_hist.append(test_loss)\n",
+        "  rel_err_hist.append(rel_err_test)\n",
+        "\n",
+        " \n",
+        "  print(fmt.format(epoch+1, max_epochs, loss.item(), test_loss, traffix_score, rel_err_test, net.depth, \n",
+        "                    optimizer.param_groups[0]['lr'], eps, time_epoch))\n",
+        "  \n",
+        "  # ---------------------------------------------------------------------\n",
+        "  # Save weights\n",
+        "  # ---------------------------------------------------------------------\n",
+        "  if traffix_score > best_traffix_score:\n",
+        "    best_traffix_score = traffix_score\n",
+        "    state = {\n",
+        "        'test_loss_hist': test_loss_hist,\n",
+        "        'traffix_score_hist': traffix_score_hist,\n",
+        "        'rel_err_hist': rel_err_hist,\n",
+        "        'net_state_dict': net.state_dict(),\n",
+        "        'optimizer_state_dict': optimizer.state_dict(),\n",
+        "        'lr_scheduler': lr_scheduler,\n",
+        "    }\n",
+        "    file_name = save_dir + 'FinalResults/' + data_set + '_weights.pth'\n",
+        "    torch.save(state, file_name)\n",
+        "    print('Model weights saved to ' + file_name)\n",
+        "\n",
+        "  # ---------------------------------------------------------------------\n",
+        "  # Save history at last epoch\n",
+        "  # ---------------------------------------------------------------------\n",
+        "\n",
+        "  if epoch+1 == max_epochs:\n",
+        "      state = {\n",
+        "        'test_loss_hist': test_loss_hist,\n",
+        "        'traffix_score_hist': traffix_score_hist,\n",
+        "        'rel_err_hist': rel_err_hist,\n",
+        "        'lr_scheduler': lr_scheduler,\n",
+        "        'eps': eps,\n",
+        "      }\n",
+        "      file_name = save_dir + 'FinalResults/' + data_set + '_history.pth'\n",
+        "      torch.save(state, file_name)\n",
+        "      print('Training history saved to ' + file_name)"
+      ],
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "stream",
+          "text": [
+            "Traffix_Net(\n",
+            "  (F_fcs_d): ModuleList(\n",
+            "    (0): Linear(in_features=10, out_features=100, bias=True)\n",
+            "    (1): Linear(in_features=100, out_features=100, bias=True)\n",
+            "  )\n",
+            "  (fc_final_d): Linear(in_features=100, out_features=766, bias=True)\n",
+            "  (F_fcs): ModuleList(\n",
+            "    (0): Linear(in_features=766, out_features=100, bias=True)\n",
+            "    (1): Linear(in_features=100, out_features=100, bias=True)\n",
+            "  )\n",
+            "  (fc_final): Linear(in_features=100, out_features=766, bias=True)\n",
+            "  (relu): ReLU()\n",
+            "  (leaky_relu): LeakyReLU(negative_slope=0.1)\n",
+            "  (tanh): Tanh()\n",
+            ")\n",
+            "\n",
+            "Training G-FPN\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[   1/ 200]: train loss = 1.112e+02 | test loss = 1.111e+02 | traffix score =  15.187% | rel error = 2.381e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[   2/ 200]: train loss = 1.103e+02 | test loss = 1.103e+02 | traffix score =  15.146% | rel error = 2.372e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[   3/ 200]: train loss = 1.092e+02 | test loss = 1.091e+02 | traffix score =  16.021% | rel error = 2.359e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[   4/ 200]: train loss = 1.076e+02 | test loss = 1.074e+02 | traffix score =  17.045% | rel error = 2.341e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[   5/ 200]: train loss = 1.054e+02 | test loss = 1.052e+02 | traffix score =  18.189% | rel error = 2.317e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[   6/ 200]: train loss = 1.024e+02 | test loss = 1.021e+02 | traffix score =  19.275% | rel error = 2.283e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[   7/ 200]: train loss = 9.831e+01 | test loss = 9.799e+01 | traffix score =  20.660% | rel error = 2.236e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[   8/ 200]: train loss = 9.345e+01 | test loss = 9.307e+01 | traffix score =  22.773% | rel error = 2.179e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[   9/ 200]: train loss = 8.816e+01 | test loss = 8.776e+01 | traffix score =  24.251% | rel error = 2.116e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  10/ 200]: train loss = 8.315e+01 | test loss = 8.282e+01 | traffix score =  24.965% | rel error = 2.056e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  11/ 200]: train loss = 7.903e+01 | test loss = 7.873e+01 | traffix score =  27.309% | rel error = 2.004e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  12/ 200]: train loss = 7.547e+01 | test loss = 7.517e+01 | traffix score =  28.723% | rel error = 1.959e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  13/ 200]: train loss = 7.202e+01 | test loss = 7.181e+01 | traffix score =  30.614% | rel error = 1.914e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  14/ 200]: train loss = 6.868e+01 | test loss = 6.854e+01 | traffix score =  32.165% | rel error = 1.870e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  15/ 200]: train loss = 6.535e+01 | test loss = 6.518e+01 | traffix score =  33.348% | rel error = 1.824e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  16/ 200]: train loss = 6.168e+01 | test loss = 6.148e+01 | traffix score =  34.732% | rel error = 1.771e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  17/ 200]: train loss = 5.742e+01 | test loss = 5.723e+01 | traffix score =  36.903% | rel error = 1.709e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  18/ 200]: train loss = 5.264e+01 | test loss = 5.240e+01 | traffix score =  39.070% | rel error = 1.635e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  19/ 200]: train loss = 4.725e+01 | test loss = 4.720e+01 | traffix score =  41.801% | rel error = 1.552e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  20/ 200]: train loss = 4.196e+01 | test loss = 4.187e+01 | traffix score =  44.794% | rel error = 1.462e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  21/ 200]: train loss = 3.670e+01 | test loss = 3.665e+01 | traffix score =  49.445% | rel error = 1.368e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  22/ 200]: train loss = 3.169e+01 | test loss = 3.175e+01 | traffix score =  52.095% | rel error = 1.273e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  23/ 200]: train loss = 2.713e+01 | test loss = 2.728e+01 | traffix score =  56.544% | rel error = 1.180e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  24/ 200]: train loss = 2.304e+01 | test loss = 2.328e+01 | traffix score =  59.804% | rel error = 1.090e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  25/ 200]: train loss = 1.947e+01 | test loss = 1.974e+01 | traffix score =  63.942% | rel error = 1.004e-02 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  26/ 200]: train loss = 1.646e+01 | test loss = 1.668e+01 | traffix score =  67.349% | rel error = 9.225e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  27/ 200]: train loss = 1.373e+01 | test loss = 1.403e+01 | traffix score =  70.531% | rel error = 8.460e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  28/ 200]: train loss = 1.147e+01 | test loss = 1.175e+01 | traffix score =  72.392% | rel error = 7.742e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  29/ 200]: train loss = 9.512e+00 | test loss = 9.794e+00 | traffix score =  74.586% | rel error = 7.069e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  30/ 200]: train loss = 7.845e+00 | test loss = 8.132e+00 | traffix score =  76.570% | rel error = 6.442e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  31/ 200]: train loss = 6.474e+00 | test loss = 6.720e+00 | traffix score =  78.572% | rel error = 5.856e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  32/ 200]: train loss = 5.245e+00 | test loss = 5.534e+00 | traffix score =  80.785% | rel error = 5.314e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  33/ 200]: train loss = 4.304e+00 | test loss = 4.542e+00 | traffix score =  82.563% | rel error = 4.814e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  34/ 200]: train loss = 3.501e+00 | test loss = 3.713e+00 | traffix score =  83.930% | rel error = 4.353e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  35/ 200]: train loss = 2.771e+00 | test loss = 3.009e+00 | traffix score =  85.049% | rel error = 3.918e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  36/ 200]: train loss = 2.247e+00 | test loss = 2.442e+00 | traffix score =  86.450% | rel error = 3.530e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  37/ 200]: train loss = 1.768e+00 | test loss = 1.962e+00 | traffix score =  87.344% | rel error = 3.164e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  38/ 200]: train loss = 1.435e+00 | test loss = 1.587e+00 | traffix score =  88.918% | rel error = 2.846e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  39/ 200]: train loss = 1.140e+00 | test loss = 1.284e+00 | traffix score =  90.193% | rel error = 2.560e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  40/ 200]: train loss = 9.046e-01 | test loss = 1.043e+00 | traffix score =  91.121% | rel error = 2.307e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  41/ 200]: train loss = 7.456e-01 | test loss = 8.520e-01 | traffix score =  92.081% | rel error = 2.085e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  42/ 200]: train loss = 5.759e-01 | test loss = 6.994e-01 | traffix score =  92.707% | rel error = 1.889e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  43/ 200]: train loss = 4.772e-01 | test loss = 5.796e-01 | traffix score =  93.198% | rel error = 1.720e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  44/ 200]: train loss = 3.923e-01 | test loss = 4.845e-01 | traffix score =  93.588% | rel error = 1.572e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  45/ 200]: train loss = 3.251e-01 | test loss = 4.098e-01 | traffix score =  93.833% | rel error = 1.446e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  46/ 200]: train loss = 2.728e-01 | test loss = 3.500e-01 | traffix score =  94.268% | rel error = 1.336e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  47/ 200]: train loss = 2.359e-01 | test loss = 3.044e-01 | traffix score =  94.492% | rel error = 1.246e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  48/ 200]: train loss = 1.964e-01 | test loss = 2.691e-01 | traffix score =  94.704% | rel error = 1.172e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  49/ 200]: train loss = 1.757e-01 | test loss = 2.416e-01 | traffix score =  94.848% | rel error = 1.110e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  50/ 200]: train loss = 1.599e-01 | test loss = 2.200e-01 | traffix score =  95.006% | rel error = 1.060e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  51/ 200]: train loss = 1.449e-01 | test loss = 2.035e-01 | traffix score =  95.193% | rel error = 1.019e-03 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  52/ 200]: train loss = 1.345e-01 | test loss = 1.905e-01 | traffix score =  95.282% | rel error = 9.860e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  53/ 200]: train loss = 1.335e-01 | test loss = 1.805e-01 | traffix score =  95.315% | rel error = 9.598e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  54/ 200]: train loss = 1.213e-01 | test loss = 1.723e-01 | traffix score =  95.342% | rel error = 9.378e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  55/ 200]: train loss = 1.150e-01 | test loss = 1.660e-01 | traffix score =  95.365% | rel error = 9.205e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  56/ 200]: train loss = 1.151e-01 | test loss = 1.608e-01 | traffix score =  95.407% | rel error = 9.058e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  57/ 200]: train loss = 1.116e-01 | test loss = 1.567e-01 | traffix score =  95.405% | rel error = 8.942e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  58/ 200]: train loss = 1.060e-01 | test loss = 1.532e-01 | traffix score =  95.426% | rel error = 8.841e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  59/ 200]: train loss = 1.059e-01 | test loss = 1.502e-01 | traffix score =  95.438% | rel error = 8.756e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  60/ 200]: train loss = 1.067e-01 | test loss = 1.479e-01 | traffix score =  95.448% | rel error = 8.688e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  61/ 200]: train loss = 9.840e-02 | test loss = 1.459e-01 | traffix score =  95.439% | rel error = 8.629e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  62/ 200]: train loss = 1.016e-01 | test loss = 1.441e-01 | traffix score =  95.463% | rel error = 8.574e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  63/ 200]: train loss = 1.025e-01 | test loss = 1.429e-01 | traffix score =  95.460% | rel error = 8.541e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  64/ 200]: train loss = 9.954e-02 | test loss = 1.413e-01 | traffix score =  95.464% | rel error = 8.492e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  65/ 200]: train loss = 1.081e-01 | test loss = 1.400e-01 | traffix score =  95.486% | rel error = 8.453e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  66/ 200]: train loss = 9.888e-02 | test loss = 1.388e-01 | traffix score =  95.517% | rel error = 8.416e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  67/ 200]: train loss = 9.605e-02 | test loss = 1.379e-01 | traffix score =  95.520% | rel error = 8.388e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  68/ 200]: train loss = 9.648e-02 | test loss = 1.368e-01 | traffix score =  95.512% | rel error = 8.354e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  69/ 200]: train loss = 9.787e-02 | test loss = 1.362e-01 | traffix score =  95.528% | rel error = 8.336e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  70/ 200]: train loss = 9.531e-02 | test loss = 1.350e-01 | traffix score =  95.543% | rel error = 8.299e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  71/ 200]: train loss = 9.508e-02 | test loss = 1.342e-01 | traffix score =  95.545% | rel error = 8.275e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  72/ 200]: train loss = 1.004e-01 | test loss = 1.334e-01 | traffix score =  95.552% | rel error = 8.252e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  73/ 200]: train loss = 9.291e-02 | test loss = 1.327e-01 | traffix score =  95.563% | rel error = 8.228e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  74/ 200]: train loss = 9.328e-02 | test loss = 1.322e-01 | traffix score =  95.557% | rel error = 8.213e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  75/ 200]: train loss = 9.889e-02 | test loss = 1.314e-01 | traffix score =  95.589% | rel error = 8.189e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  76/ 200]: train loss = 8.933e-02 | test loss = 1.308e-01 | traffix score =  95.572% | rel error = 8.170e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  77/ 200]: train loss = 1.011e-01 | test loss = 1.302e-01 | traffix score =  95.586% | rel error = 8.152e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  78/ 200]: train loss = 9.466e-02 | test loss = 1.297e-01 | traffix score =  95.611% | rel error = 8.134e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  79/ 200]: train loss = 8.729e-02 | test loss = 1.291e-01 | traffix score =  95.594% | rel error = 8.117e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  80/ 200]: train loss = 9.138e-02 | test loss = 1.287e-01 | traffix score =  95.601% | rel error = 8.105e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  81/ 200]: train loss = 9.210e-02 | test loss = 1.283e-01 | traffix score =  95.597% | rel error = 8.091e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  82/ 200]: train loss = 8.936e-02 | test loss = 1.276e-01 | traffix score =  95.603% | rel error = 8.068e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  83/ 200]: train loss = 8.598e-02 | test loss = 1.272e-01 | traffix score =  95.614% | rel error = 8.057e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  84/ 200]: train loss = 8.421e-02 | test loss = 1.269e-01 | traffix score =  95.605% | rel error = 8.047e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  85/ 200]: train loss = 8.457e-02 | test loss = 1.266e-01 | traffix score =  95.612% | rel error = 8.037e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  86/ 200]: train loss = 9.020e-02 | test loss = 1.262e-01 | traffix score =  95.602% | rel error = 8.025e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  87/ 200]: train loss = 8.883e-02 | test loss = 1.258e-01 | traffix score =  95.615% | rel error = 8.014e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  88/ 200]: train loss = 8.083e-02 | test loss = 1.254e-01 | traffix score =  95.617% | rel error = 7.999e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  89/ 200]: train loss = 8.553e-02 | test loss = 1.251e-01 | traffix score =  95.613% | rel error = 7.988e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  90/ 200]: train loss = 8.482e-02 | test loss = 1.247e-01 | traffix score =  95.625% | rel error = 7.976e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  91/ 200]: train loss = 8.282e-02 | test loss = 1.245e-01 | traffix score =  95.639% | rel error = 7.970e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  92/ 200]: train loss = 8.581e-02 | test loss = 1.240e-01 | traffix score =  95.637% | rel error = 7.955e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  93/ 200]: train loss = 8.747e-02 | test loss = 1.238e-01 | traffix score =  95.629% | rel error = 7.948e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  94/ 200]: train loss = 8.443e-02 | test loss = 1.236e-01 | traffix score =  95.662% | rel error = 7.942e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  95/ 200]: train loss = 8.568e-02 | test loss = 1.233e-01 | traffix score =  95.647% | rel error = 7.933e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  96/ 200]: train loss = 7.685e-02 | test loss = 1.230e-01 | traffix score =  95.676% | rel error = 7.921e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  97/ 200]: train loss = 8.089e-02 | test loss = 1.230e-01 | traffix score =  95.649% | rel error = 7.922e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  98/ 200]: train loss = 8.887e-02 | test loss = 1.226e-01 | traffix score =  95.705% | rel error = 7.908e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[  99/ 200]: train loss = 8.645e-02 | test loss = 1.226e-01 | traffix score =  95.684% | rel error = 7.909e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 100/ 200]: train loss = 9.132e-02 | test loss = 1.222e-01 | traffix score =  95.707% | rel error = 7.897e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 101/ 200]: train loss = 8.183e-02 | test loss = 1.221e-01 | traffix score =  95.736% | rel error = 7.895e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 102/ 200]: train loss = 7.922e-02 | test loss = 1.217e-01 | traffix score =  95.760% | rel error = 7.880e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 103/ 200]: train loss = 8.456e-02 | test loss = 1.214e-01 | traffix score =  95.758% | rel error = 7.872e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 104/ 200]: train loss = 7.904e-02 | test loss = 1.215e-01 | traffix score =  95.775% | rel error = 7.875e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 105/ 200]: train loss = 8.694e-02 | test loss = 1.211e-01 | traffix score =  95.774% | rel error = 7.862e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 106/ 200]: train loss = 7.694e-02 | test loss = 1.211e-01 | traffix score =  95.807% | rel error = 7.862e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 107/ 200]: train loss = 8.572e-02 | test loss = 1.210e-01 | traffix score =  95.787% | rel error = 7.858e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 108/ 200]: train loss = 7.874e-02 | test loss = 1.208e-01 | traffix score =  95.784% | rel error = 7.850e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 109/ 200]: train loss = 8.370e-02 | test loss = 1.206e-01 | traffix score =  95.800% | rel error = 7.846e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 110/ 200]: train loss = 7.779e-02 | test loss = 1.205e-01 | traffix score =  95.797% | rel error = 7.843e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 111/ 200]: train loss = 7.882e-02 | test loss = 1.203e-01 | traffix score =  95.795% | rel error = 7.835e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 112/ 200]: train loss = 8.130e-02 | test loss = 1.203e-01 | traffix score =  95.802% | rel error = 7.837e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 113/ 200]: train loss = 7.232e-02 | test loss = 1.200e-01 | traffix score =  95.783% | rel error = 7.825e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 114/ 200]: train loss = 7.711e-02 | test loss = 1.200e-01 | traffix score =  95.805% | rel error = 7.825e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 115/ 200]: train loss = 8.602e-02 | test loss = 1.198e-01 | traffix score =  95.806% | rel error = 7.818e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 116/ 200]: train loss = 7.785e-02 | test loss = 1.198e-01 | traffix score =  95.802% | rel error = 7.820e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 117/ 200]: train loss = 8.009e-02 | test loss = 1.195e-01 | traffix score =  95.782% | rel error = 7.808e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 118/ 200]: train loss = 7.926e-02 | test loss = 1.195e-01 | traffix score =  95.801% | rel error = 7.810e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 119/ 200]: train loss = 7.923e-02 | test loss = 1.192e-01 | traffix score =  95.824% | rel error = 7.798e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 120/ 200]: train loss = 8.133e-02 | test loss = 1.193e-01 | traffix score =  95.799% | rel error = 7.802e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 121/ 200]: train loss = 8.073e-02 | test loss = 1.192e-01 | traffix score =  95.824% | rel error = 7.799e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 122/ 200]: train loss = 7.935e-02 | test loss = 1.192e-01 | traffix score =  95.801% | rel error = 7.799e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 123/ 200]: train loss = 7.852e-02 | test loss = 1.188e-01 | traffix score =  95.819% | rel error = 7.787e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 124/ 200]: train loss = 8.053e-02 | test loss = 1.189e-01 | traffix score =  95.821% | rel error = 7.789e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 125/ 200]: train loss = 7.793e-02 | test loss = 1.186e-01 | traffix score =  95.822% | rel error = 7.781e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 126/ 200]: train loss = 7.566e-02 | test loss = 1.186e-01 | traffix score =  95.806% | rel error = 7.780e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 127/ 200]: train loss = 7.766e-02 | test loss = 1.186e-01 | traffix score =  95.828% | rel error = 7.780e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 128/ 200]: train loss = 7.516e-02 | test loss = 1.185e-01 | traffix score =  95.815% | rel error = 7.777e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 129/ 200]: train loss = 8.176e-02 | test loss = 1.183e-01 | traffix score =  95.833% | rel error = 7.769e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 130/ 200]: train loss = 8.048e-02 | test loss = 1.181e-01 | traffix score =  95.834% | rel error = 7.764e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 131/ 200]: train loss = 7.524e-02 | test loss = 1.182e-01 | traffix score =  95.831% | rel error = 7.765e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 132/ 200]: train loss = 7.485e-02 | test loss = 1.180e-01 | traffix score =  95.811% | rel error = 7.759e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 133/ 200]: train loss = 8.407e-02 | test loss = 1.178e-01 | traffix score =  95.832% | rel error = 7.753e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 134/ 200]: train loss = 7.733e-02 | test loss = 1.178e-01 | traffix score =  95.844% | rel error = 7.752e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 135/ 200]: train loss = 7.432e-02 | test loss = 1.177e-01 | traffix score =  95.846% | rel error = 7.749e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 136/ 200]: train loss = 7.868e-02 | test loss = 1.176e-01 | traffix score =  95.815% | rel error = 7.746e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 137/ 200]: train loss = 8.216e-02 | test loss = 1.176e-01 | traffix score =  95.844% | rel error = 7.748e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 138/ 200]: train loss = 7.702e-02 | test loss = 1.173e-01 | traffix score =  95.826% | rel error = 7.738e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 139/ 200]: train loss = 8.199e-02 | test loss = 1.173e-01 | traffix score =  95.841% | rel error = 7.737e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 140/ 200]: train loss = 8.068e-02 | test loss = 1.174e-01 | traffix score =  95.826% | rel error = 7.739e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 141/ 200]: train loss = 7.413e-02 | test loss = 1.173e-01 | traffix score =  95.851% | rel error = 7.737e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 142/ 200]: train loss = 7.862e-02 | test loss = 1.170e-01 | traffix score =  95.825% | rel error = 7.725e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 143/ 200]: train loss = 7.366e-02 | test loss = 1.169e-01 | traffix score =  95.861% | rel error = 7.723e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 144/ 200]: train loss = 7.271e-02 | test loss = 1.169e-01 | traffix score =  95.842% | rel error = 7.724e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 145/ 200]: train loss = 8.023e-02 | test loss = 1.167e-01 | traffix score =  95.849% | rel error = 7.717e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 146/ 200]: train loss = 7.609e-02 | test loss = 1.166e-01 | traffix score =  95.856% | rel error = 7.714e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 147/ 200]: train loss = 7.399e-02 | test loss = 1.166e-01 | traffix score =  95.855% | rel error = 7.714e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 148/ 200]: train loss = 7.383e-02 | test loss = 1.163e-01 | traffix score =  95.864% | rel error = 7.704e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 149/ 200]: train loss = 7.370e-02 | test loss = 1.163e-01 | traffix score =  95.855% | rel error = 7.703e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 150/ 200]: train loss = 7.728e-02 | test loss = 1.164e-01 | traffix score =  95.857% | rel error = 7.707e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 151/ 200]: train loss = 7.657e-02 | test loss = 1.163e-01 | traffix score =  95.851% | rel error = 7.704e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 152/ 200]: train loss = 7.372e-02 | test loss = 1.158e-01 | traffix score =  95.883% | rel error = 7.689e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 153/ 200]: train loss = 7.281e-02 | test loss = 1.162e-01 | traffix score =  95.848% | rel error = 7.700e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 154/ 200]: train loss = 7.269e-02 | test loss = 1.161e-01 | traffix score =  95.845% | rel error = 7.698e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 155/ 200]: train loss = 7.654e-02 | test loss = 1.157e-01 | traffix score =  95.882% | rel error = 7.685e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 156/ 200]: train loss = 6.902e-02 | test loss = 1.159e-01 | traffix score =  95.862% | rel error = 7.692e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 157/ 200]: train loss = 7.689e-02 | test loss = 1.156e-01 | traffix score =  95.868% | rel error = 7.681e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 158/ 200]: train loss = 7.182e-02 | test loss = 1.154e-01 | traffix score =  95.883% | rel error = 7.673e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 159/ 200]: train loss = 8.043e-02 | test loss = 1.157e-01 | traffix score =  95.889% | rel error = 7.683e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 160/ 200]: train loss = 7.464e-02 | test loss = 1.155e-01 | traffix score =  95.861% | rel error = 7.678e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 161/ 200]: train loss = 7.561e-02 | test loss = 1.153e-01 | traffix score =  95.884% | rel error = 7.671e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 162/ 200]: train loss = 7.250e-02 | test loss = 1.150e-01 | traffix score =  95.917% | rel error = 7.661e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 163/ 200]: train loss = 7.190e-02 | test loss = 1.153e-01 | traffix score =  95.861% | rel error = 7.672e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 164/ 200]: train loss = 7.638e-02 | test loss = 1.153e-01 | traffix score =  95.867% | rel error = 7.671e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 165/ 200]: train loss = 7.142e-02 | test loss = 1.148e-01 | traffix score =  95.900% | rel error = 7.654e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 166/ 200]: train loss = 8.204e-02 | test loss = 1.147e-01 | traffix score =  95.905% | rel error = 7.651e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 167/ 200]: train loss = 7.649e-02 | test loss = 1.146e-01 | traffix score =  95.907% | rel error = 7.649e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 168/ 200]: train loss = 7.699e-02 | test loss = 1.148e-01 | traffix score =  95.880% | rel error = 7.656e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 169/ 200]: train loss = 7.869e-02 | test loss = 1.147e-01 | traffix score =  95.894% | rel error = 7.651e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 170/ 200]: train loss = 7.334e-02 | test loss = 1.142e-01 | traffix score =  95.909% | rel error = 7.635e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 171/ 200]: train loss = 7.645e-02 | test loss = 1.145e-01 | traffix score =  95.904% | rel error = 7.644e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 172/ 200]: train loss = 7.553e-02 | test loss = 1.147e-01 | traffix score =  95.872% | rel error = 7.649e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 173/ 200]: train loss = 7.132e-02 | test loss = 1.142e-01 | traffix score =  95.921% | rel error = 7.635e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 174/ 200]: train loss = 7.631e-02 | test loss = 1.142e-01 | traffix score =  95.894% | rel error = 7.635e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 175/ 200]: train loss = 7.567e-02 | test loss = 1.145e-01 | traffix score =  95.899% | rel error = 7.644e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 176/ 200]: train loss = 7.526e-02 | test loss = 1.139e-01 | traffix score =  95.906% | rel error = 7.624e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 177/ 200]: train loss = 6.939e-02 | test loss = 1.138e-01 | traffix score =  95.897% | rel error = 7.621e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 178/ 200]: train loss = 7.421e-02 | test loss = 1.144e-01 | traffix score =  95.908% | rel error = 7.640e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 179/ 200]: train loss = 7.375e-02 | test loss = 1.137e-01 | traffix score =  95.908% | rel error = 7.618e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 180/ 200]: train loss = 7.382e-02 | test loss = 1.137e-01 | traffix score =  95.891% | rel error = 7.616e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 181/ 200]: train loss = 7.093e-02 | test loss = 1.134e-01 | traffix score =  95.918% | rel error = 7.606e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 182/ 200]: train loss = 7.254e-02 | test loss = 1.134e-01 | traffix score =  95.884% | rel error = 7.607e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 183/ 200]: train loss = 7.087e-02 | test loss = 1.134e-01 | traffix score =  95.921% | rel error = 7.607e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 184/ 200]: train loss = 7.449e-02 | test loss = 1.132e-01 | traffix score =  95.909% | rel error = 7.599e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 185/ 200]: train loss = 6.973e-02 | test loss = 1.131e-01 | traffix score =  95.919% | rel error = 7.596e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 186/ 200]: train loss = 7.061e-02 | test loss = 1.133e-01 | traffix score =  95.919% | rel error = 7.604e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 187/ 200]: train loss = 7.682e-02 | test loss = 1.131e-01 | traffix score =  95.862% | rel error = 7.597e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 188/ 200]: train loss = 7.128e-02 | test loss = 1.128e-01 | traffix score =  95.928% | rel error = 7.587e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 189/ 200]: train loss = 7.476e-02 | test loss = 1.132e-01 | traffix score =  95.912% | rel error = 7.601e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 190/ 200]: train loss = 6.929e-02 | test loss = 1.126e-01 | traffix score =  95.893% | rel error = 7.581e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 191/ 200]: train loss = 6.734e-02 | test loss = 1.129e-01 | traffix score =  95.934% | rel error = 7.591e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 192/ 200]: train loss = 7.550e-02 | test loss = 1.131e-01 | traffix score =  95.903% | rel error = 7.596e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 193/ 200]: train loss = 7.434e-02 | test loss = 1.124e-01 | traffix score =  95.918% | rel error = 7.575e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 194/ 200]: train loss = 6.925e-02 | test loss = 1.124e-01 | traffix score =  95.950% | rel error = 7.572e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Model weights saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_weights.pth\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 195/ 200]: train loss = 7.080e-02 | test loss = 1.124e-01 | traffix score =  95.947% | rel error = 7.572e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 196/ 200]: train loss = 7.453e-02 | test loss = 1.124e-01 | traffix score =  95.925% | rel error = 7.573e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 197/ 200]: train loss = 7.029e-02 | test loss = 1.123e-01 | traffix score =  95.921% | rel error = 7.570e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 198/ 200]: train loss = 6.671e-02 | test loss = 1.122e-01 | traffix score =  95.936% | rel error = 7.567e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 199/ 200]: train loss = 7.003e-02 | test loss = 1.122e-01 | traffix score =  95.936% | rel error = 7.568e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n"
+          ],
+          "name": "stdout"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            ""
+          ],
+          "name": "stderr"
+        },
+        {
+          "output_type": "stream",
+          "text": [
+            "[ 200/ 200]: train loss = 7.091e-02 | test loss = 1.120e-01 | traffix score =  95.937% | rel error = 7.561e-04 depth =  50.0 | lr = 5.0e-05 | eps = 1.0e-04 | time = 6.7e+01\n",
+            "Training history saved to drive/MyDrive/NashFPNs/TrafficTrainingData/FinalResults/Berlin-Tiergarten_history.pth\n"
+          ],
+          "name": "stdout"
+        }
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "nqXJxGJoxMWn"
+      },
+      "source": [
+        "## Plot Testing Error"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "rlzK9VrHyuqF",
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "outputId": "3356f600-6416-4e6d-d71e-2f1345fabcf7"
+      },
+      "source": [
+        "# ---------------------------------------------\n",
+        "# Plot testing history\n",
+        "# ---------------------------------------------\n",
+        "import matplotlib.pyplot as plt\n",
+        "\n",
+        "fig1 = plt.figure(1)\n",
+        "plt.plot(train_loss_hist, linewidth=3)\n",
+        "plt.plot(test_loss_hist, linewidth=3)\n",
+        "plt.legend(['training loss', 'testing loss'], fontsize=15)\n",
+        "plt.xlabel('epochs', fontsize=15)\n",
+        "plt.ylabel('|z - z*|', fontsize=15)\n",
+        "plt.title('Mean Squared Error', fontsize=15)\n",
+        "plt.savefig('line_plot.pdf')  "
+      ],
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "display_data",
+          "data": {
+            "image/png": "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zZqFPKY6x+3atYvk5ORy+wSvV8fOnTuB43/v0vV9+/bh8/n48MMP6dChAzfffDMdOnRg5MiRLF26FIC2bduyYMECCgsLGT9+PMnJyYwZM4bMzMwax1MdVg1VDVH9RsOODADO8X3HwtW7+fHIXh5HZU501a0CagwqGopizpw53HXXXeWqjt5/39uqtw4dOpCTk1OuLHi9Ojp27Ag4A0QmJSX5y3fv3g1AYmIiAAMGDODtt9+msLCQzz//nHvvvZcxY8aQlZWFz+cjLS2NDz74gLy8PP79739zzz33cP311/P111/X9leslN1ZVEfvsnrCkVHLWZS518NgjGmcqvvpvlReXh6xsbH+9eLiYt54442GCK3aTj/9dN57771y48W9++67NT7PSSedRHx8/HE9l2bPnk2/fv2Ou1uJiYlh1KhR3HPPPezcufO4Kqe4uDjGjh3LzTffzKpVq2ocT3XYnUV1dD6V4tjWRBUcpIPs58DmZZSUpNoEScbUwIABA5g3bx7vvPMOXbp0oVOnTnTq1KnS/UePHs2zzz5Lnz59SExM5Nlnny3X/dUL9957L8OHD2fChAn88Ic/ZPXq1bz44osANfrORmJiInfffTe/+tWviI6OJjU1lblz5zJ//nxef/11AL777jt+/vOfc+2119KrVy/279/P9OnTGTJkCImJibz//vu89NJLXHnllXTr1o3t27fzwgsvMGrUqAb53S1ZVIcvCl+fUbDy7wCccmwZG3KO0C+llceBGdN43HHHHSxdupSbb76Z/fv3k56e7v+uRUWeeeYZbr/9du68807i4uKYOHEi3/ve97j11lvDF3SQ1NRUXn/9de6//37mzZtHamoqzz//PKNHj67xpEKPPvoo0dHRPP/88+zevZs+ffrw6quvMmHCBMCp8kpJSeHXv/41O3bsoE2bNpx//vlMnz4dgD59+iAi3H///WRnZ5OcnMzll1/OY489Vu+/N4CEe/htEXkJuBzIVtWT3LJE4E2gB7AZGK+q+8WpyPw9cBmQC0xS1f+Geo7U1FTNyMio38AXvwjzfw7AvOKzODzmj/wgrXv9PocxlVi9ejUDBw70OgxTgVdffZUbb7yRzMxMevbs6XU4VQr1OhKRJaqaWtE2L9osZgGXBJXdByxU1b7AQncd4FKgr/u4FXg+TDEez+0RBTBENvLN5n2ehWKM8c5P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\n",
+            "text/plain": [
+              "<Figure size 432x288 with 1 Axes>"
+            ]
+          },
+          "metadata": {
+            "tags": [],
+            "needs_background": "light"
+          }
+        }
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "7f2yRiqEV6Hm",
+        "colab": {
+          "base_uri": "https://localhost:8080/"
+        },
+        "outputId": "a7038f27-b37e-4924-f5e9-db30963929c0"
+      },
+      "source": [
+        "fig1 = plt.figure(2)\n",
+        "plt.plot(traffix_score_hist, linewidth=3)\n",
+        "plt.legend(['traffix score history'], fontsize=15)\n",
+        "plt.xlabel('epochs', fontsize=15)\n",
+        "plt.ylabel('traffix score', fontsize=15)\n",
+        "plt.title('Traffix Score', fontsize=15)\n",
+        "plt.savefig('traffix_score_plot.pdf')  "
+      ],
+      "execution_count": null,
+      "outputs": [
+        {
+          "output_type": "display_data",
+          "data": {
+            "image/png": "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y8GDBxk/fnxQ13vHHXeQkZHBhx9+SEJCAgAvv/wy7733Hm+88QaZmZn06NGDkpISrrnmmqBuu7l56aWXiIuLC3j5pvpOQ8mSgR++l5MOPTMjjJGYlqysrAyPx0NMTGB3vG/cuJGJEydy2WWX1Sjr06cPN9xwQ41lO3fuHNRYQ6m4uLjJryg766yzmnT99VFVSkpKSExMDOl2Qz3sZRcRWSoi60VknYjc75anishHIvKV+xy2zn/yj5WwelcBAB6By3qHZ6xl0zyNHz+e+fPns3z5ckQEEWH69OlAddXEzJkz6dGjB4mJiezdu5eNGzcyevRounTpQnJyMmeffTb/93//R2VlJQDLli1DRKioqOD+++9HRBg/fjxZWVm89tprrF692rst4IRqorvvvpv09PQa16fPnz8fEWHRokV1fpZ169Zx1VVXkZqaSkpKCn379mXGjBk1llmwYAEDBw4kKSmJtLQ0rr76anbsqL44Y8mSJVx44YUkJibSoUMHfvSjH9Wowqn6bB9++CHXXnstrVq14p577gFg586djB49mtTUVJKTkxkxYgQ5OTkBfQ/btm1j+PDhpKSkcOaZZ/LOO+/UeL12NdHu3bu5+eabycjIICkpiR49ejB16lSg/u8U4Ne//jW9evUiISGBnj178sILL9TYVtX38cknn3DBBReQmJjInDlz6NSpU431+MZ2/fXXB/Q5GyLUZwblwEOq+l8RaQ2sEpGPgPHAYlV9SkSmAFOAySGODYB5q3Z7RzM7v2s72qXEhyMM00xNnTqVnTt3UlBQwEsvvQTU/JX+6aefsmXLFp5++mmSk5M57bTT2LRpE3369GHs2LG0bt2aNWvWMG3aNIqLi3n00Uc5//zz+de//sXFF1/MQw89xI033kh6ejr3338/TzzxBFu3buX111+vM6ZnnnmGDz/8kDvuuIMFCxawf/9+7rrrLu68806uvPLKOt93zTXX0LdvX37/+9+TkJBATk4OR44c8b7+5ptvcuuttzJ69GimTp2KqrJkyRIOHDhAt27dvMlk+PDhzJ8/n127djFlyhS2bt3KBx98UGNbEyZM4LbbbuOBBx4gMTGRQ4cOMWjQINLS0njllVdITk7mqaee4oorrmDTpk0nPXP47ne/y8SJE/nxj3/Miy++yOjRo9m6dWudZ0y33norxcXFzJw5k7Zt27J161Y2btx40u/01Vdf5d5772XSpEmMGDGCpUuX8tBDD1FSUsKUKVO86y8qKmLcuHE88sgj9O7dm06dOjFu3DjeeOMNpk2b5k3kW7du5e9//zsLFwZ/mPhQD3uZC+S600dFZAOQCYwChriLzQaWEYZkUFpeySyffohuvqBLqEMwpyBryl/DHQLbnxoZ0HI9evQgNTWVyspKLrroohNeLygoYM2aNXToUN3tybBhwxg2bBjgVCEMGjSIoqIiXn31VR599FHatGnjXVdWVlaN9aanp5OXl+d3W1VSUlKYPXs2l156KW+++SYLFiygdevWPPvss3W+5+DBg2zbto2FCxfSr18/b5xVKisrmTJlCtdffz1vvfWWt/zaa6/1Tj/55JN069aNd99911sVlpqayi233OJNblVuuukmnnzySe/81KlTKSwsZM2aNaSmpgJwySWXkJWVxe9+9zvuvvvuOmMHePDBB7n99tsBGDBgAB06dOAvf/kLd955p9/lV6xYwVtvveVtaxkyZIj3tbq+08rKSqZPn8748eN57rnnALjyyis5fPgw//u//+tNbOBUfT3//POMGjXK+/7bb7+dp556imXLlnH55ZcDTgN4RkYG3/rWt+r9fKcibC2jIpKFMx7yZ0AHN1EA7AP8dgAkIhNFZKWIrDxw4EDQY/rL2r3sO+JcRZTeOoFR/TsFfRvG1KfqwOTr+PHjTJs2jZ49e5KQkEBcXByPP/4427Zto7y8PCjbveSSS5g0aRI//OEPWbhwIbNmzSIlJaXO5VNTU+nSpQt33nknc+bMOaELhJycHPbu3cttt91W5zpWrFjB9ddfX6NN5IYbbiA2NpZPPvmkxrIjR9ZMth9//DHDhw+nTZs2lJeXU15eTuvWrRkwYAArV6486ef1PeNJS0sjIyOD3bt317l8//79efTRR5k1axY7d+486frBqVrau3cvN910U43yW265hSNHjvDFF194y0TkhAN8r169uPTSS71XKakqb7zxBt///veJjQ3+7/iwJAMRaQXMBx5Q1SO+r6mqAurvfao6U1WzVTU7PT24dfllFZXMWLrZOz/+m1kkxFpX1Sa0aicCgMmTJ/Pss88yceJE3n//ff7zn//wxBNPAE6iCJYxY8ZQUlLCOeecw+DBg+td1uPxsGjRIk4//XRuv/12Tj/9dAYPHszq1asByM/PB6Bjx451riM3N/eEzxsTE0NaWhqHDh2qUV57uYMHDzJnzhzi4uJqPJYuXcquXbtO+lnbtm1bYz4+Pr7efTlnzhyys7N58MEH6datG/3792fx4sX1biM3N9dv7FXzvp+xXbt2xMefWCU9YcIE5s+fz7Fjx1iyZAk7duzwntEEW8ivJhKROJxE8AdVrWq1yRORjqqaKyIdgVPraakR/rRip3cAm1YJsYy1foiiRqBVNNHAX3cC8+bN49577+WRRx7xlv31r8GtGisvL2fixIn069ePdevWMXPmTCZOnFjve84880zmz59PWVkZ//jHP5g8eTIjR45k9+7dpKWlAdUHRH86dux4whlFRUUF+fn53qqfKrX3S2pqKtdee623EddX69at6437VGRmZjJr1iwqKytZsWIF06dP59prr2Xnzp3ez1pbVSKs/Rnz8pxL130/Y13dSNx0003cd999zJ07l6VLl3LhhRfSt2/fYHykE4T6aiIBXgM2qOrzPi+9C4xzp8cBwW8dqcfh4jJe+Pgr7/zdl/ekbbI1HJumcbJfobUVFxd77xsA54D5pz/9Kagx/fznPycnJ4eFCxcyefJkHn74YbZv3x7Qe+Pi4hg6dCiTJk0iNzeXgoIC+vTpQ2ZmJrNnz67zfRdeeCELFiygoqLCW/bOO+9QXl7OoEGD6t3msGHDWLduHWeffTbZ2dk1Hn369Ako7lPh8Xi46KKLmDZtGkVFRd4ro/x9p507d6ZTp07MmzevRvncuXNp06aNt62lPklJSYwZM4YZM2bwzjvv1Fvt1lihPjO4BPg+8IWIrHHLHgOeAuaKyARgB3BzKIN6aelmDhWWApDZNonbLskK5eZNC3PmmWeycOFC/vznP3sPGJ061d0+NXz4cGbMmEHPnj1JTU1lxowZlJSUBC2e1atX87Of/YwXX3yR7t27M23aNN577z1uv/12Fi9e7PdX69q1a3n44Ye55ZZbOOOMM/j66695+umnOffcc72/eJ955hnGjh3L2LFjGTNmDCLCkiVLGDNmDNnZ2TzxxBOcd955XHfdddx1113s3r2byZMnM2LEiBqNx/5MmjSJ3//+9wwdOpR7772XzMxM8vLyWL58OYMGDWLMmDFB2z+HDx9mxIgR3HrrrfTu3ZuSkhKee+45Tj/9dO+v9Lq+0+nTp3PHHXeQlpbG8OHDWb58OS+//DI///nPA76PYMKECbzyyiskJSUxevTooH2uE6hqVD4GDBigwbAzv1B7Pfa+dpv8F+02+S+6cM2eoKzXNI3169eHO4RGO3DggF533XXarl07BXTatGmqqnrZZZfpDTfccMLy+/bt0+uuu05bt26tGRkZ+uMf/1hnzpypgB49etS7HKAvvvhijfeOGzdOa/+vTJs2TdPS0lRVtaSkRPv166dXXnlljWVWr16tcXFx+qtf/crvZ8jLy9Pvfe972r17d01ISNAOHTro6NGjdceOHTWWmz9/vp5//vmakJCgqampevXVV+v27du9r3/88cc6cOBATUhI0PT0dL3rrrtqfKalS5cqoF988cUJMezZs0fHjx+vGRkZGh8fr926ddOxY8fql19+6TdmVdXXX3/9hP2mqtqtWzd96KGHvPO+38Xx48f1Bz/4gfbu3VuTkpI0LS1NR44cqWvXrvUuX9d3qqr6q1/9Snv06KFxcXHavXt3ff7552ts2/f7qEtmZqaOHTu23mWqnOx/BFipfo6pouq3rTbiZWdnayBXDZzMj/6wive/2AfAeV3b8s5d37QukiPYhg0bmqzO1JhItH79es4++2w+/vjjGpfv1uVk/yMiskpVs2uXt+juKP6+6YA3EQA8MfIsSwTGmIiQn59PTk4OU6dO5ZxzzmHo0KFNur0W2wNbSXkF095d552/rn8nBnQLWy8YxhhTw3vvvcegQYPIzc319rbalFpsMnj2wxy2HXQuJW2dGMtjI63qwRgTOcaPH09lZSXr169nwIABTb69FlVNtHhDHq9/up1dXxexI7/IW/7IiD5ktA5tD4HGGBNJWlQy2HawkE82H6xRNqRPOt+7yEYyiyaqam07xvjRmAuCWlQ10eHishrz6a0T+MWN59qBJYrExcVRXFwc7jCMiUjFxcUNGpTHV4s6M7g5uwsDurXjcHEZJWWVDO7dnvTWCSd/o4kYGRkZ7Nmzh8zMTJKSkiyRG4NzRlBcXMyePXv89m8ViBaVDLqkJtMlNTncYZhGaNOmDQB79+6lrKzsJEsb03LExcXRoUMH7/9IQ7WoZGCahzZt2pzyH7wxxr8W1WZgjDHGP0sGxhhjLBkYY4yxZGCMMQZLBsYYY7BkYIwxBqJ3PAMROYAzKtqpaA8cPOlSoRepcUHkxmZxNYzF1XCRGtupxtVNVdNrF0ZtMmgMEVnpb3CHcIvUuCByY7O4GsbiarhIjS3YcVk1kTHGGEsGxhhjWm4ymBnuAOoQqXFB5MZmcTWMxdVwkRpbUONqkW0GxhhjamqpZwbGGGN8WDIwxhjT8pKBiFwlIjkisllEpoQxji4islRE1ovIOhG53y2fLiJ7RGSN+7g6DLFtF5Ev3O2vdMtSReQjEfnKfW4X4pj6+OyTNSJyREQeCNf+EpHfich+EfnSp8zvPhLHr9y/ubUicn6I4/qFiGx0t71ARNq65VkiUuyz714JcVx1fnci8qi7v3JEZESI45rjE9N2EVnjlodyf9V1fGi6vzFVbTEPIAbYApwBxAOfA2eFKZaOwPnudGtgE3AWMB14OMz7aTvQvlbZM8AUd3oK8HSYv8d9QLdw7S/gUuB84MuT7SPgauBvgAAXAZ+FOK4rgVh3+mmfuLJ8lwvD/vL73bn/B58DCUB39382JlRx1Xr9OeAnYdhfdR0fmuxvrKWdGQwENqvqVlUtBf4EjApHIKqaq6r/daePAhuAzHDEEqBRwGx3ejZwXRhjGQZsUdVTvQO90VT178ChWsV17aNRwBvq+DfQVkQ6hiouVV2kquXu7L+Bzk2x7YbGVY9RwJ9UtURVtwGbcf53QxqXOGOq3gy81RTbrk89x4cm+xtrackgE9jlM7+bCDgAi0gWcB7wmVt0j3uq97tQV8e4FFgkIqtEZKJb1kFVc93pfcCpDbQaHKOp+Q8a7v1Vpa59FEl/d7fj/IKs0l1EVovIchEZHIZ4/H13kbK/BgN5qvqVT1nI91et40OT/Y21tGQQcUSkFTAfeEBVjwAvAz2A/kAuzmlqqA1S1fOBbwF3i8ilvi+qc14almuSRSQeuBaY5xZFwv46QTj3UV1E5HGgHPiDW5QLdFXV84BJwB9FJJTjiUbkd+djDDV/dIR8f/k5PngF+2+spSWDPUAXn/nObllYiEgczhf9B1V9B0BV81S1QlUrgVdpotPj+qjqHvd5P7DAjSGv6rTTfd4f6rhc3wL+q6p5boxh318+6tpHYf+7E5HxwLeBse5BBLcaJt+dXoVTN987VDHV891Fwv6KBb4DzKkqC/X+8nd8oAn/xlpaMvgP0EtEuru/MEcD74YjELc+8jVgg6o+71PuW893PfBl7fc2cVwpItK6ahqn8fFLnP00zl1sHLAwlHH5qPFrLdz7q5a69tG7wK3uFR8XAYd9TvWbnIhcBTwCXKuqRT7l6SIS406fAfQCtoYwrrq+u3eB0SKSICLd3bhWhCou1xXARlXdXVUQyv1V1/GBpvwbC0XLeCQ9cFrdN+Fk9cfDGMcgnFO8tcAa93E18CbwhVv+LtAxxHGdgXMlx+fAuqp9BKQBi4GvgI+B1DDssxQgHzjNpyws+wsnIeUCZTj1sxPq2kc4V3jMcP/mvgCyQxzXZpz65Kq/s1fcZW9wv+M1wH+Ba0IcV53fHfC4u79ygG+FMi63fBZwZ61lQ7m/6jo+NNnfmHVHYYwxpsVVExljjPHDkoExxhhLBsYYYywZGGOMwZKBMcYYLBkYEzYiMkREVETOCXcsxlgyMMYYY8nAGGOMJQPTAonIYLfXySIRyReRV3264BjvVt1cICL/cAcz2SQi1/tZzz3uICMl7qAiD/pZ5hsi8p6IFIjIMRFZISLDay3WXkTmua9vFZEf1VrH2SLygYgcEpFCEdkgIncHdaeYFs+SgWlRROQSnNv49wE3Ag/g3Ob/eq1F5+D0+/IdnNv754nIuT7r+SHwIk43Ctfg9KL6nPiMniciZwKf4gxUcidO/zsLqNmhGDidtH3uvr4MmCEivh3uvQdUAN/D6bH1RZwBT4wJGuuOwrQoIvIPoFxVL/cpG4rT30s/IBsnMTyuqj93X/cA64E1qjrand8FLFLV23zW8xIwFqfP+eMi8hZOn/i9VLXYTyxDgKXAk6r6E7csDtgLvKaqU0SkPXAA+IaqfhHk3WGMl50ZmBZDRJKBi4G5IhJb9QA+wemobIDP4guqJtTpYnkh1V0sdwY6UT2mQpU5QBucpAIwFJjjLxHUsshnW2U4nZBVjUZ2CCfxvCIit4hIRiCf1ZiGsmRgWpJ2OOMnv4Rz8K96lABx1Ky+qT1ew36c6h58nvNqLVM1n+o+p+H0iHkyBbXmS4FE8CaiK3GqtX4H7HPbMs4LYL3GBCw23AEYE0IFON0CTwfe9/P6XpwDL0AGTnfZ+MxXHdhzfcp8VQ1BWDWmbj7VieOUqepG4Aa3CmkwzqD2fxWRzm6yMKbR7MzAtBiqWogzIHwfVV3p57HXZ3Hv1UNuG8EoqgdY2Y2TOG6qtYmbgSM4Dc7gtEPcLCKJQYq/TFWXAM/jJJm2wVivMWBnBqbleQRYLCKVwNvAUaArMBJnQJUqPxCRUpzRt34A9MQZZQ1VrRSR6cBvRCQf+Ai4DLgLeExVj7vr+B+c0fX+LiLP4ZwpnAfkq+rvAglWRL4BPIvTHrEVp6prMvC5qh6q773GNIQlA9OiqOonInIpzoH6TZw2hB3AB9RsAxgNvAD8DKcB9xZVXe2znlfdX/z3u4/dwEOq+oLPMjkiMgh4CvitW7weeKwBIe9z43ocp9G6AOcKpMkNWIcxJ2WXlhrjwx04/nWgtaoeC3M4xoSMtRkYY4yxZGCMMcaqiYwxxmBnBsYYY7BkYIwxBksGxhhjsGRgjDEGSwbGGGOA/w8MxO2fPB7GGAAAAABJRU5ErkJggg==\n",
+            "text/plain": [
+              "<Figure size 432x288 with 1 Axes>"
+            ]
+          },
+          "metadata": {
+            "tags": [],
+            "needs_background": "light"
+          }
+        }
+      ]
+    },
+    {
+      "cell_type": "markdown",
+      "metadata": {
+        "id": "T_cZwKRwjkoL"
+      },
+      "source": [
+        "## Generate CSV File"
+      ]
+    },
+    {
+      "cell_type": "code",
+      "metadata": {
+        "id": "rBk1hBb3jlin"
+      },
+      "source": [
+        "filename = data_set + '_epoch_vs_relerr.csv'\n",
+        "with open(filename, 'w') as f: \n",
+        "  for epoch, rel_err in enumerate(rel_err_hist):     \n",
+        "    f.write('%0.5e,%0.5e\\n' % (epoch + 1, rel_err)) \n",
+        "\n",
+        "filename = data_set + '_epoch_vs_trafix.csv'\n",
+        "with open(filename, 'w') as f: \n",
+        "  for epoch, traffix_score in enumerate(traffix_score_hist):     \n",
+        "    f.write('%0.5e,%0.5e\\n' % (epoch + 1, traffix_score)) "
+      ],
+      "execution_count": null,
+      "outputs": []
+    }
+  ]
+}

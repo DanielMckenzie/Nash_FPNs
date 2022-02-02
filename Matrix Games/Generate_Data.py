@@ -20,21 +20,18 @@ payoff_matrix = torch.tensor
 # Generate random seed. Fix matrix relating context to payoff matrix.
 # ---------------------------------------------------------------------------
 
-action_size = 4
+action_size = 100
 context_size = 3
 
 
 # The number of independent params in a action_size-by-action_size
 # antisym matrix 
 
-num_ind_params = int(action_size*action_size/2)
+num_ind_params = int(action_size*(action_size-1)/2)
 
 # seed = 30
 # torch.manual_seed(seed)
-W = torch.rand((num_ind_params, context_size))
-# W = torch.rand(3, 3) * torch.tensor([10, 10, 10])
-# W = W.permute(1, 0)
-# print(W)
+W = torch.rand((num_ind_params, context_size))* 10
 
 def sample_context(num_samples: int) -> context:
     return torch.rand(num_samples, 3) 
@@ -42,14 +39,6 @@ def sample_context(num_samples: int) -> context:
 def create_payoff_matrix(d: context, action_size) -> payoff_matrix:
     ind_params = torch.matmul(W, d.permute(1, 0))
     P = VecToAntiSymMatrix(ind_params.permute(1, 0), action_size)
-#    num_samples = d.shape[0] 
-#    action_size = d.shape[1]
-#    Wd = d.mm(W.permute(1,0)) 
-#    B = torch.zeros(num_samples, action_size, action_size)
-#    B[:,0,1] = -Wd[:, 0]
-#    B[:,0,2] =  Wd[:, 1]
-#    B[:,1,2] = -Wd[:, 2]
-#    B -= B.permute(0, 2, 1)
     return P
 
 # ---------------------------------------------------------------------------
@@ -70,25 +59,22 @@ def F(x: action, d: context, action_size) -> action:
 # as game gradient is monotone.
 # ---------------------------------------------------------------------------
     
-def get_nash_eq(d: context, action_size, fxd_pt_tol=1e-7, max_iter=20000, 
-                step_size=5e-4, debug_mode=False) -> action:
+def get_nash_eq(d: context, action_size, fxd_pt_tol=1e-8, max_iter=20000, 
+                step_size=5e-5, debug_mode=False) -> action:
     num_samples = d.shape[0]
-    # x           = torch.rand(num_samples, action_size)
-    # x = SampleSimplex(num_samples, action_size)
-    x = torch.ones(num_samples, action_size)/(2*action_size) # initialize at uniform strategy for both players
+    x = torch.ones(num_samples, 2*action_size)/(2*action_size) # initialize at uniform strategy for both players
     conv        = False
     step        = 0
     while not conv and step < max_iter:
         x_prev = x.clone()
-        y = project_simplex(x - step_size*F(x, d, action_size))
-        # x = project_simplex(x - step_size * F(y, d))
+        y = project_simplex(x - step_size*F(x, d, action_size), action_size=action_size)
         x = y
         res = torch.max(torch.norm(x - x_prev, dim=1)) 
         step += 1
         conv = res < fxd_pt_tol 
         if step % 5 == 0 and debug_mode:
-            fmt_str = "Step {:5d}: |xk - xk_prev| = {:2.2e}   x[0,:] = "
-            print(fmt_str.format(step, res) + str(x[0,:]))
+            fmt_str = "Step {:5d}: |xk - xk_prev| = {:2.2e}   x[5,:] = "
+            print(fmt_str.format(step, res) + str(x[5,:]))
         if step % 100 == 0:
             step_size *= 0.5
     return x

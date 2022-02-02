@@ -1,5 +1,7 @@
 '''
-This file collects some utils for implementing the CMU groups RPS architecture
+This file collects some utils for implementing the Payoff-Net architecture, as
+described in "What game are we playing?" by Ling, Fang and Kolter. Code is 
+adapted from that available at https://github.com/lingchunkai/payoff_learning
 '''
 
 import torch
@@ -53,7 +55,7 @@ class Solver(object):
 
 class GRELogit(Solver):
     '''
-    Solves for quantal response equilibrium. Not sure why they call it GRE.
+    Solves for quantal response equilibrium.
     '''
     
     def __init__(self, g):
@@ -211,14 +213,16 @@ class ZSGSolver(torch.autograd.Function):
         U, V = torch.Tensor(U), torch.Tensor(V)
         dev2s = torch.Tensor(dev2s)
         ctx.save_for_backward(input, U, V, dev2s)
+        ctx.action_size=size
         
         return U, V
     
     @staticmethod
-    def backward(ctx, grad_u, grad_v, size=3):
+    def backward(ctx, grad_u, grad_v):
         # backprop gradients of u and v thru solver.
         batchsize = grad_u.shape[0]
         P, U, V, dev2s = ctx.saved_tensors
+        size = ctx.action_size
         # P, U, V, dev2a = tuple([x.data.numpy() for x in ctx.saved_variables])
         dP = np.zeros([batchsize, size, size], dtype=np.float64)
         for i in range(batchsize):

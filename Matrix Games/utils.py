@@ -7,6 +7,11 @@ import numpy as np
 
 
 def project_simplex(y, action_size=3, num_players=2):
+    '''
+        Takes in x = [u, v], interpreted as a pair of player action profiles.
+        returns [proj(u), proj(v)] where proj() denotes projection to prob.
+        simplex.
+    '''
     num_samples = y.shape[0]
     proj = torch.zeros(y.shape)
     for i in range(num_players):
