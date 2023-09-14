@@ -63,7 +63,7 @@ class GRELogit(Solver):
         # g is the game.
         
     def Solve(self, alpha=0.1, beta=0.95, tol=10**-3, epsilon=10**-8, 
-              min_t=10**-20, max_it=50):
+              min_t=10**-20, max_it=500):
         '''
         Solve for QRE using Newton's method.
         :param alpha parameter for line search

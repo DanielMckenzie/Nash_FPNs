@@ -11,4 +11,4 @@ Please cite as
         journal={arXiv preprint arXiv:2106.00906},
         year={2021}}
 
-Code for reproducing the experiments of Section 5.1 are in `Matrix-Games`. Code to reproduce the experiments of Section 5.2 are in `Traffic-Routing`. The Jupyter notebooks `N_FPN_Rock_Paper_Scissors` and `N_FPN_Toy_Traffic.ipynb` contain two tutorial-style examples of using N-FPNs. 
+Code for reproducing the experiments of Section 5.1 are in `matrix-mames`. Code to reproduce the experiments of Section 5.2 are in `traffic-routing`. The Jupyter notebooks `N_FPN_Rock_Paper_Scissors` and `N_FPN_Toy_Traffic.ipynb` contain two tutorial-style examples of using N-FPNs. 

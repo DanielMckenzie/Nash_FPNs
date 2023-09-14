@@ -1,10 +1,23 @@
 import torch
 from prettytable import PrettyTable
 from time import sleep
-import time
-from tqdm import tqdm
 import numpy as np
+import torch.nn as nn
+import torch
 
+class LinearMonotoneLayer(nn.Module):
+    def __init__(self, input_dim, monotonicity_param):
+        super(LinearMonotoneLayer, self).__init__()
+
+        # Define the weights
+        self.A = nn.Parameter(torch.randn(input_dim, input_dim))
+        self.B = nn.Parameter(torch.randn(input_dim, input_dim))
+        self.m = monotonicity_param
+
+    def forward(self, x):
+        temp = torch.matmul(x, self.A)
+        out = (1-self.m)*x - torch.matmul(temp, self.A.t()) + torch.matmul(x, self.B) - torch.matmul(x, self.B.t())
+        return out
 
 def project_simplex(y, action_size=3, num_players=2):
     '''

@@ -10,7 +10,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import torch.nn.functional as F
-from utils import project_simplex, SampleSimplex
+from utils import project_simplex, LinearMonotoneLayer
 from Payoff_Net_Utils import ZSGSolver, VecToAntiSymMatrix
 
 classification = torch.tensor
@@ -111,6 +111,59 @@ class NFPN_RPS_Net(nn.Module):
         '''
         return z
         
+
+## Cocoercive variant of the above
+class CoCo_NFPN_RPS_Net(nn.Module):
+    def __init__(self, action_size=3, context_size=3):
+        '''
+            NB: action_size = dim of single player's action space
+        '''
+        super(CoCo_NFPN_RPS_Net, self).__init__()
+        self.fc_1 = nn.Linear(context_size, 2*action_size)
+        self.linear = LinearMonotoneLayer(2*action_size, 0.5)
+        self.leaky_relu = nn.LeakyReLU(0.1)
+        self.action_size = action_size
+        
+    def device(self) -> str:
+        return next(self.parameters()).data.device
+    
+    def name(self):
+        '''
+            Returns name of model.
+        '''
+        return 'CoCo_NFPN_RPS_Net'
+    
+    def data_space_forward(self, d: context) -> latent_variable:
+        '''
+            Map context to latent space.
+        '''
+        Qd = self.leaky_relu(self.fc_1(d))
+        return Qd
+    
+    def latent_space_forward(self, z1, z2: action) -> action:
+        '''
+        Forward operator. Note this is of the form
+            Proj(z - F(z;d))
+        '''
+        Fxd = z1 - self.linear(z1 + z2)
+        zz = project_simplex(z1 - 0.001*Fxd, action_size=self.action_size) # need to use smaller step-size for larger problems
+
+        return zz
+    
+    def forward(self, d: context, eps=1.0e-5, max_depth=100,
+                depth_warning=False):
+        '''
+            Forward propagation using N-FPN. Finds fixed point of PGD-type
+            operator.
+        '''
+        return forward_implicit(self, d, eps=eps, max_depth=max_depth,
+                                depth_warning=depth_warning)
+        
+    def map_latent_to_inference(self, z: action) -> action:
+        '''
+            Not really necessary, as latent space coincides with output space.
+        '''
+        return z
         
 
 # ----------------------------------------------------------------------------

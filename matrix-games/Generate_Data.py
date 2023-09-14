@@ -10,6 +10,7 @@ from torch.utils.data import Dataset, TensorDataset, DataLoader
 from torch.utils.data.dataset import random_split
 from utils import project_simplex, SampleSimplex
 from Payoff_Net_Utils import VecToAntiSymMatrix
+import argparse
 
 context       = torch.tensor
 action        = torch.tensor
@@ -20,7 +21,12 @@ payoff_matrix = torch.tensor
 # Generate random seed. Fix matrix relating context to payoff matrix.
 # ---------------------------------------------------------------------------
 
-action_size = 100
+parser = argparse.ArgumentParser()
+
+parser.add_argument("--action_size", default=10, type=int)
+args = parser.parse_args()
+action_size = args.action_size
+#action_size = 60
 context_size = 3
 
 
