@@ -114,7 +114,7 @@ class NFPN_RPS_Net(nn.Module):
 
 ## Cocoercive variant of the above
 class CoCo_NFPN_RPS_Net(nn.Module):
-    def __init__(self, action_size=3, context_size=3):
+    def __init__(self, latent_step_size, action_size=3, context_size=3):
         '''
             NB: action_size = dim of single player's action space
         '''
@@ -123,6 +123,7 @@ class CoCo_NFPN_RPS_Net(nn.Module):
         self.linear = LinearMonotoneLayer(2*action_size, 0.5)
         self.leaky_relu = nn.LeakyReLU(0.1)
         self.action_size = action_size
+        self.latent_step_size = latent_step_size
         
     def device(self) -> str:
         return next(self.parameters()).data.device
@@ -146,7 +147,7 @@ class CoCo_NFPN_RPS_Net(nn.Module):
             Proj(z - F(z;d))
         '''
         Fxd = z1 - self.linear(z1 + z2)
-        zz = project_simplex(z1 - 0.001*Fxd, action_size=self.action_size) # need to use smaller step-size for larger problems
+        zz = project_simplex(z1 - self.latent_step_size*Fxd, action_size=self.action_size) # need to use smaller step-size for larger problems
 
         return zz
     

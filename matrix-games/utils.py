@@ -10,13 +10,19 @@ class LinearMonotoneLayer(nn.Module):
         super(LinearMonotoneLayer, self).__init__()
 
         # Define the weights
-        self.A = nn.Parameter(torch.randn(input_dim, input_dim))
-        self.B = nn.Parameter(torch.randn(input_dim, input_dim))
+        #self.A = nn.utils.spectral_norm(nn.Parameter(torch.randn(input_dim, input_dim)))
+        self.A = nn.utils.spectral_norm(nn.Linear(in_features=input_dim, out_features=input_dim))
+        self.B = nn.utils.spectral_norm(nn.Linear(in_features=input_dim, out_features=input_dim))
         self.m = monotonicity_param
 
+    def apply_transpose(self, x, weights):
+        y = torch.mm(x, weights.t())
+        return y
+
     def forward(self, x):
-        temp = torch.matmul(x, self.A)
-        out = (1-self.m)*x - torch.matmul(temp, self.A.t()) + torch.matmul(x, self.B) - torch.matmul(x, self.B.t())
+        #temp = torch.matmul(x, self.A)
+        out = self.apply_transpose(self.A(x), self.A.weight)
+        out = (1-self.m)*x - out + self.B(x) - self.apply_transpose(x, self.B.weight) #torch.matmul(x, self.B) - torch.matmul(x, self.B.t())
         return out
 
 def project_simplex(y, action_size=3, num_players=2):

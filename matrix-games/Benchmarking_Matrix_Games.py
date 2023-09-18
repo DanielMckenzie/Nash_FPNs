@@ -20,7 +20,7 @@ import time
 # Initialize arrays for recording total train time, final test accuracy.
 # ---------------------------------------------------------------------------
 num_sizes = 10
-num_trials = 1
+num_trials = 3
 
 NFPN_time = np.zeros((num_sizes, num_trials))
 CoCo_NFPN_time = np.zeros((num_sizes, num_trials))
@@ -39,7 +39,7 @@ for b in range(0, num_trials):
         # ------------------------------------------------------------------------
         # Some global variables for both models
         # ------------------------------------------------------------------------
-        action_size = 10*a + 90 # 5*a + 25 # action size
+        action_size = 10*a + 10 # 5*a + 25 # action size
         max_epochs = 100
         
         # ------------------------------------------------------------------------
@@ -144,12 +144,15 @@ for b in range(0, num_trials):
         # Initialize (CoCo)ercive Nash FPN model
         # ----------------------------------------------------------------------
 
-        model = CoCo_NFPN_RPS_Net(action_size)
+        
         if action_size <= 25:
             learning_rate = 1e-2
+            latent_step_size = 1.
         else:
              learning_rate = 1e-3
+             latent_step_Size = 1. #1e-3
 
+        model = CoCo_NFPN_RPS_Net(latent_step_size, action_size)
         optimizer = optim.Adam(model.parameters(), lr=learning_rate)
         scheduler = ReduceLROnPlateau(optimizer, 'min')
         fixed_pt_tol = 1.0e-5
@@ -173,7 +176,6 @@ for b in range(0, num_trials):
         train_start_time = time.time()
         
         for epoch in range(max_epochs):
-            print(epoch)
             start_time = time.time()
             num_batches = len(train_loader)
             train_loss = 0
@@ -295,6 +297,18 @@ for b in range(0, num_trials):
         final_acc = test_loss.item()
         Payoff_Net_time[a, b] = total_time
         Payoff_Net_acc[a, b] = final_acc
+
+        # ----------------------------------------------------------------------
+        # Dump results into a file
+        # ----------------------------------------------------------------------
+        results = {"NFPN_time": NFPN_time,
+           "NFPN_acc": NFPN_acc,
+           "Payoff_Net_time": Payoff_Net_time,
+           "Payoff_Net_acc": Payoff_Net_acc}
+
+        myfile = open("experiment1/results_exp1_100epochs_revision2_Sept16.p", "wb")
+        pkl.dump(results, myfile)
+        myfile.close()
     
 
     
@@ -305,12 +319,12 @@ for b in range(0, num_trials):
 # ----------------------------------------------------------------------------
 results = {"NFPN_time": NFPN_time,
            "NFPN_acc": NFPN_acc,
-           "CoCo_NFPN_time": CoCo_NFPN_time,
-           "CoCo_NFPN_acc": CoCo_NFPN_acc,
+        #    "CoCo_NFPN_time": CoCo_NFPN_time,
+        #    "CoCo_NFPN_acc": CoCo_NFPN_acc,
            "Payoff_Net_time": Payoff_Net_time,
            "Payoff_Net_acc": Payoff_Net_acc}
 
-myfile = open("experiment1/results_exp1_100epochs_revision2.p", "wb")
+myfile = open("experiment1/results_exp1_100epochs_revision2_Sept16.p", "wb")
 pkl.dump(results, myfile)
 myfile.close()
 
